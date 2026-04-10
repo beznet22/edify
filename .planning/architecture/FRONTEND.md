@@ -1,6 +1,6 @@
 # Edify AI: Comprehensive Frontend Architecture
 
-This document exhaustively defines the Edify AI frontend architecture, heavily leveraging the strict HUD and performance patterns defined by the canonical Rhema codebase.
+This document exhaustively defines the Edify AI frontend architecture, heavily leveraging strict HUD and performance patterns.
 
 ## 1. Technology Stack
 *   **Core Framework:** React 19 (Strict Mode) running inside Tauri v2 WebView (Edge/WebKit2).

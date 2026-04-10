@@ -1,12 +1,12 @@
 # Edify AI System Architecture Overview
 
-This document provides the high-level structural blueprint for Edify AI, an evolution of the Rhema architecture into a 3-in-1 Agentic Platform.
+This document provides the high-level structural blueprint for Edify AI, a 3-in-1 Agentic Platform.
 
 ## 1. System Philosophy
-Edify AI retains the **Local-First Modular Monolith** architecture of Rhema (Tauri v2 + Rust + React 19) but expands its deployment target across both **Desktop (macOS/Windows) and Mobile (iOS/Android)** parameters. The primary architectural shift involves moving from a *reactive* pipeline to an *agentic, stateful* pipeline, introducing persistent memory, proactive context retrieval, and AI-driven UI orchestration.
+Edify AI utilizes a **Local-First Modular Monolith** architecture (Tauri v2 + Rust + React 19) expanding its deployment target across both **Desktop (macOS/Windows) and Mobile (iOS/Android)** parameters. The primary architectural shift involves moving from a *reactive* pipeline to an *agentic, stateful* pipeline, introducing persistent memory, proactive context retrieval, and AI-driven UI orchestration.
 
 ## 2. The 3-in-1 Product Scope
-1. **Agentic Live Sermon/Lecture Engine:** This encapsulates the validated Rhema workflow — real-time extraction, referencing, and contextual breakdown of speech into UI artifacts, augmented with autonomous agentic intelligence.
+1. **Agentic Live Sermon/Lecture Engine:** This encapsulates real-time verse extraction, referencing (for live sermons only), and contextual breakdown (for live lectures/group study only) of speech into UI artifacts, augmented with autonomous agentic intelligence.
 2. **Agentic Personal Bible Study System:** A personalized, persistent study experience combining a local Knowledge Graph, RAG memory, and an **immersive chatbot interface** for deep conversational exploration of scripture and personal devotions.
 3. **Agentic Live Streaming Studio (Deferred):** A multi-channel output director that integrates seamlessly with the core broadcast pipeline.
 

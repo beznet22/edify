@@ -1,14 +1,14 @@
 # ROADMAP
 
 ## Milestone 1: Agentic Live Sermon Engine (Current)
-*Focus: Stabilizing the Rhema core detection pipeline and introducing proactive context-layer reasoning for live speaking events.*
+*Focus: Stabilizing the core detection pipeline and introducing proactive context-layer reasoning for live speaking events.*
 
 ### Phase 1: Core Event Bus & App Root Orchestration
 - Establish `edify-core` and the strict Tauri Command routing over global Zustand stores.
 
 ### Phase 2: Live Inference Integration
 - Integrate `edify-audio`, `edify-stt`, and `edify-engine`.
-- Wire the 4-stage verse detection system without regressions from Rhema.
+- Wire the 4-stage verse detection system without performance regressions.
 
 ### Phase 3: Proactive Detection Agents
 - Enable the engine to dispatch autonomous background events containing simple context/theology reasoning derived from Vector embeddings.

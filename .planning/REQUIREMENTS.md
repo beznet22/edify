@@ -1,6 +1,6 @@
 # Edify AI Requirements
 
-## Validated Core (from Rhema)
+## Validated Core
 - [x] Sub-100ms real-time audio pipeline via Deepgram WebSocket
 - [x] 4-stage verse detection engine (Aho-Corasick, Quotation Overlap, Semantic Embedding, Context Boost)
 - [x] FTS5 SQLite schema with 10 Bible translations and 340k cross-references

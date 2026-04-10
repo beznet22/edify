@@ -1,6 +1,6 @@
 # Edify AI: Comprehensive Backend Architecture
 
-This document exhaustively defines the Edify AI backend architecture, deeply inheriting the production-grade patterns proven by the canonical Rhema codebase. Edify AI extends these foundations with local AI agent capabilities.
+This document exhaustively defines the Edify AI backend architecture, deeply utilizing production-grade patterns extended with local AI agent capabilities.
 
 ## 1. Technology Stack
 *   **Runtime Environment:** Tauri v2 (Serving as IPC Command/Events router and window manager across macOS, Windows, iOS, and Android).
@@ -34,7 +34,7 @@ Edify AI resolves the need for RAG without introducing blocking latency by utili
 *   **Tier 2: Offline Agentic Graph (SQLite Entity Schema)**
     *   A relational/graph table structure residing inside SQLite mapping Nodes (People, Themes, Books) and Edges (Contextual paths). The `edify-study` agent relies on this to map "Why does this verse matter now?" out-of-band.
 
-## 4. The Real-Time Detection Pipeline (Inherited from Rhema)
+## 4. The Real-Time Detection Pipeline
 The critical path executes inside `edify-engine` utilizing an Ensemble Detection Strategy that is completely generative-LLM-free:
 1.  **Direct Reference Detection:** O(N) Aho-Corasick state machine parsing citations (e.g., "John 3:16") while managing multi-word splits.
 2.  **Quotation Matching:** Fast sliding-window word-overlap scoring against an inverted Bible index.

@@ -1,6 +1,6 @@
 # Edify AI: AI & Agent Layer Architecture
 
-The move from Rhema to Edify AI is defined by the leap from "Reactive Machine Learning" to "Proactive Agentic Reasoning."
+Edify AI is defined by the leap from "Reactive Machine Learning" to "Proactive Agentic Reasoning."
 
 ## Defining the "Agent" in Edify
 

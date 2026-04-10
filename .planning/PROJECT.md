@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Edify AI is a 3-in-1 agentic platform designed to enhance Biblical teaching, study, and broadcasting. It extends the foundational hardware-accelerated detection pipelines of the Rhema architecture into a fully autonomous agentic system covering live sermon detection, guided personal study, and an extensible live-streaming studio.
+Edify AI is a 3-in-1 agentic platform designed to enhance Biblical teaching, study, and broadcasting. It extends foundational hardware-accelerated detection pipelines into a fully autonomous agentic system covering live sermon detection, guided personal study, and an extensible live-streaming studio.
 
 ## Core Value
 
@@ -12,7 +12,7 @@ Real-time, zero-latency Biblical insight and context-aware study orchestration, 
 
 ### Validated
 
-- ✓ [Real-Time Detection] — Existing hardware-accelerated 4-stage detection pipeline (Direct, Quotation, Semantic, Context) inherited from Rhema.
+- ✓ [Real-Time Detection] — Existing hardware-accelerated 4-stage detection pipeline (Direct, Quotation, Semantic, Context) integrated.
 - ✓ [Edge-Native SQLite Data Layer] — Existing memory-mapped binary vectors and FTS5 indexing.
 - ✓ [Low-Latency Broadcast] — Existing NDI integration.
 
@@ -30,12 +30,12 @@ Real-time, zero-latency Biblical insight and context-aware study orchestration, 
 
 ## Context
 
-Edify AI inherits its DNA from the Rhema codebase. It operates as a modular monolith using Tauri v2, Rust, and React 19. The introduction of "Agentic" capabilities marks a shift from purely reactive retrieval (Rhema) to proactive orchestration (Edify)—where agents hold memory, understand theological context via a Knowledge Graph, and guide UI workflows autonomously.
+Edify AI operates as a modular monolith using Tauri v2, Rust, and React 19. The introduction of "Agentic" capabilities marks a shift from purely reactive retrieval to proactive orchestration—where agents hold memory, understand theological context via a Knowledge Graph, and guide UI workflows autonomously.
 
 ## Constraints
 
 - **Latency**: Sub-100ms for live sermon processing — Cannot use generative LLMs synchronously in the critical real-time loop.
-- **Architecture**: Modular Monolith — Must stick to the Rust Workspace domain separation established by Rhema. Now targeting cross-platform Tauri v2 compilation (Desktop, iOS, Android).
+- **Architecture**: Modular Monolith — Must stick to strict Rust Workspace domain separation. Now targeting cross-platform Tauri v2 compilation (Desktop, iOS, Android).
 - **State**: Global reactive stores — Frontend must use Zustand over pure IPC events, maintaining the "HUD" rendering paradigm across responsive viewport sizes.
 
 ## Key Decisions
