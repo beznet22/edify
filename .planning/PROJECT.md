@@ -2,71 +2,49 @@
 
 ## What This Is
 
-Edify AI is a comprehensive 3-in-1 ecosystem built on the edge-native Rhema architecture. It combines an Agentic Live Sermon/Lecture assistant, an Agentic Personal Bible Study companion (for daily reading and devotionals), and a foundational layer for a future live-streaming studio.
+Edify AI is a 3-in-1 agentic platform designed to enhance Biblical teaching, study, and broadcasting. It extends the foundational hardware-accelerated detection pipelines of the Rhema architecture into a fully autonomous agentic system covering live sermon detection, guided personal study, and an extensible live-streaming studio.
 
 ## Core Value
 
-Seamlessly bridging real-time spoken word with biblical knowledge through ultra-low-latency edge-native detection and autonomous agentic assistance.
+Real-time, zero-latency Biblical insight and context-aware study orchestration, executed locally at the edge without compromising the flow of live speaking or personal meditation.
 
 ## Requirements
 
 ### Validated
 
-<!-- Shipped and confirmed valuable from Rhema implementation. -->
-
-- ✓ [High-performance multi-strategy verse detection pipeline (Direct, Semantic, Quotation)] — existing
-- ✓ [Local-first SQLite embedded Bible database with FTS5 search] — existing
-- ✓ [Tauri v2 + Rust decoupled backend utilizing Tokio for async tasks] — existing
-- ✓ [Fixed aspect macro-grid UI dashboard avoiding reflows] — existing
+- ✓ [Real-Time Detection] — Existing hardware-accelerated 4-stage detection pipeline (Direct, Quotation, Semantic, Context) inherited from Rhema.
+- ✓ [Edge-Native SQLite Data Layer] — Existing memory-mapped binary vectors and FTS5 indexing.
+- ✓ [Low-Latency Broadcast] — Existing NDI integration.
 
 ### Active
 
-<!-- Current scope. Building toward these. -->
-
-- [ ] [Migrate/Adopt the Rhema Architecture into Edify AI Core]
-- [ ] [Implement Agentic Live Sermon / Lecture Application mode]
-- [ ] [Implement Agentic Personal Bible Study mode (devotionals, tracking, notes)]
-- [ ] [Implement deep Theological Knowledge Graph integration for offline study]
+- [ ] [Agentic Live Sermon Engine] — Overlay agentic explanations and contextual breakdown during live sessions without manual intervention.
+- [ ] [Agentic Personal Study System] — Immersive Chatbot UI combining daily reading, devotions, and conversational scripture exploration.
+- [ ] [Memory & Knowledge Layer] — Integration of a localized offline Knowledge Graph (SQLite tier 2) to empower reasoning and disambiguation.
+- [ ] [Streaming Studio Blueprint] — Architectural foundation for future multi-platform streaming capability.
 
 ### Out of Scope
 
-<!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
-
-- [Live Streaming Studio App] — Explicitly deferred to a future development phase (v2+) to prioritize core agentic features.
+- [Cloud-dependent inference for critical path] — Live speech processing must remain local-first to guarantee sub-100ms latency.
+- [Active Implementation of Live Streaming Studio] — Currently deferred to a future phase; focus is strictly on architectural extensibility right now.
 
 ## Context
 
-- **Environment:** Edge-native, Local-first desktop application
-- **Tech Stack:** Tauri v2, Rust, React 19, Tailwind v4
-- **Prior Work:** The Rhema Real-Time Detect pipeline serves as the fundamental scaffolding. The Edify AI platform must inherit its 12-section architecture specs completely.
+Edify AI inherits its DNA from the Rhema codebase. It operates as a modular monolith using Tauri v2, Rust, and React 19. The introduction of "Agentic" capabilities marks a shift from purely reactive retrieval (Rhema) to proactive orchestration (Edify)—where agents hold memory, understand theological context via a Knowledge Graph, and guide UI workflows autonomously.
 
 ## Constraints
 
-- **Latency:** Critical operations (live detection) must remain sub-100ms. Keep ML/Graph queries off the STT critical path.
-- **Hardware:** Must remain highly optimized to minimize memory overhead (specifically regarding HNSW embeddings maps).
+- **Latency**: Sub-100ms for live sermon processing — Cannot use generative LLMs synchronously in the critical real-time loop.
+- **Architecture**: Modular Monolith — Must stick to the Rust Workspace domain separation established by Rhema. Now targeting cross-platform Tauri v2 compilation (Desktop, iOS, Android).
+- **State**: Global reactive stores — Frontend must use Zustand over pure IPC events, maintaining the "HUD" rendering paradigm across responsive viewport sizes.
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Retain Rhema Architecture | Proven sub-100ms latency execution flow | — Pending |
-
-## Evolution
-
-This document evolves at phase transitions and milestone boundaries.
-
-**After each phase transition** (via `/gsd-transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
-
-**After each milestone** (via `/gsd-complete-milestone`):
-1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state
+| Retain Modular Monolith | Strict isolation without microservice overhead; optimal for Desktop & Mobile execution | — Pending |
+| Two-Tier Knowledge System | Retain vector embedding for live-path, add SQLite Knowledge Graph for offline/study path | — Pending |
+| HUD Layout System | Fixed CSS grids over router-based navigation to prevent layout thrashing | — Pending |
 
 ---
 *Last updated: 2026-04-10 after initialization*
