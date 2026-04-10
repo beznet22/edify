@@ -1,0 +1,20 @@
+[package]
+name = "rhema-stt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+url = "2"
+futures-util = "0.3"
+crossbeam-channel = "0.5"
+
+[features]
+default = ["rest-fallback"]
+rest-fallback = ["reqwest"]

@@ -1,0 +1,13 @@
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum BibleError {
+    #[error("database error: {0}")]
+    DatabaseError(#[from] rusqlite::Error),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("invalid reference: {0}")]
+    InvalidReference(String),
+}
