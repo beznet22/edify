@@ -1,0 +1,37 @@
+# --- Rust/Cargo (src-tauri) ---
+/src-tauri/target/
+/src-tauri/Cargo.lock
+# (Optional) Ignore Cargo.lock only if building a library, 
+# but for apps, it's usually recommended to commit it.
+
+# --- Frontend (Node/Yarn/PNPM/Bun) ---
+node_modules/
+dist/
+dist-js/
+.npm/
+.yarn/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+
+# --- Tauri Specific ---
+/src-tauri/gen/
+*.log
+*.bin
+
+# --- IDEs & OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Environment Variables ---
+.env
+.env.*
+!.env.example
+
+#refs
+rhema
