@@ -1,0 +1,213 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://edify.example/schemas/plugin-manifest/v1",
+  "title": "Edify Plugin Manifest",
+  "description": "Machine-readable manifest for Edify plugins. Defines the metadata, capabilities, resources, and signing scheme for third-party extensions to edify-engine. This is the canonical source of truth for the `protocol-marketplace` SemVer track. See docs/architecture/plugin-sdk.md and docs/rfcs/0006-plugin-abi.md for the prose specification.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "abi_version",
+    "author",
+    "signature",
+    "capabilities",
+    "resources",
+    "entry_point"
+  ],
+  "definitions": {
+    "CapabilityName": {
+      "type": "string",
+      "enum": [
+        "bible:read",
+        "bible:translate",
+        "kg:read",
+        "kg:write",
+        "agent:register",
+        "agent:execute",
+        "events:subscribe",
+        "events:publish",
+        "storage:read",
+        "storage:write",
+        "network:external",
+        "media:capture",
+        "media:playback",
+        "wasi:filesystem:read",
+        "wasi:filesystem:write",
+        "wasi:http:outgoing",
+        "wasi:clocks:read",
+        "wasi:random:read"
+      ]
+    },
+    "Scope": {
+      "type": "object",
+      "properties": {
+        "translations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "For bible:read; restricts which Bible translations the plugin can access"
+        },
+        "books": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "For bible:read; restricts which books the plugin can access (e.g., ['JHN', 'ROM'])"
+        },
+        "node_types": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "For kg:read/kg:write; restricts which KG node types the plugin can access"
+        },
+        "time_window": {
+          "type": "object",
+          "properties": {
+            "start": { "type": "string", "format": "date-time" },
+            "end": { "type": "string", "format": "date-time" }
+          },
+          "description": "Restricts capability to a time window (e.g., dev mode)"
+        },
+        "device_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Restricts capability to specific devices (rare)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Capability": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/definitions/CapabilityName" },
+        "version": { "type": "string", "description": "Capability version (e.g., '1', '1.0')" },
+        "scope": { "$ref": "#/definitions/Scope" }
+      }
+    },
+    "Resources": {
+      "type": "object",
+      "required": ["memory_mb", "storage_mb", "network", "concurrent_invocations"],
+      "properties": {
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024,
+          "default": 64,
+          "description": "Maximum linear memory in megabytes"
+        },
+        "storage_mb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10240,
+          "default": 10,
+          "description": "Maximum filesystem usage in megabytes"
+        },
+        "network": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether outbound network is allowed (off by default)"
+        },
+        "concurrent_invocations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 1,
+          "description": "Maximum concurrent handler invocations"
+        },
+        "cpu_instructions": {
+          "type": "integer",
+          "minimum": 1000000,
+          "default": 10000000000,
+          "description": "Maximum instruction count per invocation (default 10 billion)"
+        },
+        "wall_clock_timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "default": 30000,
+          "description": "Maximum wall-clock time per invocation in milliseconds (default 30s)"
+        }
+      }
+    },
+    "Author": {
+      "type": "object",
+      "required": ["name", "public_key"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "public_key": { "type": "string", "description": "Ed25519 public key in canonical format" },
+        "url": { "type": "string", "format": "uri" },
+        "email": { "type": "string", "format": "email" }
+      }
+    },
+    "Signature": {
+      "type": "object",
+      "required": ["algorithm", "value", "key_id"],
+      "properties": {
+        "algorithm": { "enum": ["ed25519"] },
+        "value": { "type": "string", "description": "Base64-encoded signature" },
+        "key_id": { "type": "string", "description": "Identifier of the public key used" },
+        "signed_payload": {
+          "type": "string",
+          "description": "Canonical JSON of the manifest (without the signature field) that was signed"
+        }
+      }
+    }
+  },
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "description": "Plugin name (kebab-case, globally unique)"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[a-zA-Z0-9.-]+)?(\\+[a-zA-Z0-9.-]+)?$",
+      "description": "Semantic version (e.g., '1.0.0', '2.1.0-beta.1')"
+    },
+    "abi_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Plugin ABI version (e.g., '1.0'); the engine rejects incompatible ABIs"
+    },
+    "author": { "$ref": "#/definitions/Author" },
+    "signature": { "$ref": "#/definitions/Signature" },
+    "capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/Capability" },
+      "minItems": 0,
+      "description": "Declared capabilities; the host grants only what is declared"
+    },
+    "resources": { "$ref": "#/definitions/Resources" },
+    "entry_point": {
+      "type": "string",
+      "description": "Path to the WASM module within the plugin bundle (e.g., 'main.wasm')"
+    },
+    "description": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "license": { "type": "string" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "category": {
+      "enum": [
+        "bible-translation",
+        "detection-heuristic",
+        "ai-agent",
+        "ui-theme",
+        "study-template",
+        "commentary",
+        "original-language",
+        "integration",
+        "other"
+      ]
+    },
+    "supported_languages": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$" },
+      "description": "BCP-47 language tags"
+    },
+    "minimum_engine_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
+      "description": "Minimum edify-engine version required"
+    }
+  }
+}

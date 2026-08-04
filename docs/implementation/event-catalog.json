@@ -1,0 +1,976 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://edify.example/schemas/event-catalog/v1",
+  "title": "Edify Event Catalog",
+  "description": "Machine-readable event catalog for the Edify Event Bus. Defines all event types, their payload schemas, and versioning rules. This is the canonical source of truth for the `schema-events` SemVer track. See docs/architecture/event-model.md for the prose specification.",
+  "version": "1.0.0",
+  "type": "object",
+  "definitions": {
+    "EventEnvelope": {
+      "type": "object",
+      "required": ["id", "type", "source", "timestamp"],
+      "properties": {
+        "id": { "type": "string", "description": "UUID v7 unique event identifier" },
+        "type": { "type": "string", "description": "Reverse-DNS event type with version" },
+        "source": { "type": "string", "description": "Publisher identifier" },
+        "timestamp": { "type": "integer", "format": "int64", "description": "Unix epoch seconds" },
+        "correlation_id": { "type": "string", "description": "UUID tying related events together" },
+        "causation_id": { "type": "string", "description": "UUID of the event that caused this one" },
+        "tenant_id": { "type": "string", "description": "Workspace or organization scope" },
+        "actor": {
+          "type": "object",
+          "properties": {
+            "type": { "enum": ["device", "member", "agent", "system"] },
+            "id": { "type": "string" }
+          }
+        },
+        "payload": { "type": "object" }
+      }
+    },
+    "Categories": {
+      "Bible": ["bible.translation.installed.v1"],
+      "Speech": ["speech.transcript-chunk.v1", "speech.session-started.v1", "speech.session-ended.v1", "speech.error.v1"],
+      "Detection": ["detection.candidate-emitted.v1", "detection.merged.v1", "detection.rejected.v1"],
+      "KnowledgeGraph": ["kg-node.created.v1", "kg-node.updated.v1", "kg-node.deleted.v1", "kg-edge.linked.v1", "kg-edge.unlinked.v1", "kg-embedding.generated.v1"],
+      "StudySession": ["study-session.started.v1", "study-session.paused.v1", "study-session.resumed.v1", "study-session.ended.v1", "study-session.enriching.v1", "study-session.archived.v1", "study-question.asked.v1"],
+      "Note": ["note.created.v1", "note.updated.v1", "note.deleted.v1", "note.linked.v1", "response-feedback.submitted.v1"],
+      "Devotional": ["devotional.scheduled.v1", "devotional.generated.v1", "devotional.read.v1", "devotional.reflected.v1", "devotional.archived.v1"],
+      "Device": ["device.registered.v1", "device.paired.v1", "device.unpaired.v1", "device.revoked.v1", "device.key-rotated.v1"],
+      "Sync": ["sync-unit.sent.v1", "sync-unit.received.v1", "sync-conflict.detected.v1", "sync-conflict.resolved.v1", "sync-state.snapshot.v1"],
+      "Agent": ["agent.spawned.v1", "agent.started.v1", "agent.completed.v1", "agent.failed.v1", "agent.cancelled.v1"],
+      "Plugin": ["plugin.installed.v1", "plugin.enabled.v1", "plugin.disabled.v1", "plugin.uninstalled.v1", "plugin.error.v1"],
+      "User": ["user.action.v1", "user.preference-changed.v1"],
+      "OrgWorkspace": ["org.member-added.v1", "org.member-removed.v1", "workspace.created.v1", "workspace.archived.v1", "workspace.member-added.v1", "workspace.member-removed.v1", "workspace.key-rotated.v1"],
+      "Media": ["media.capture-started.v1", "media.capture-stopped.v1", "media.playback-started.v1", "media.playback-stopped.v1"],
+      "System": ["engine.ready.v1", "engine.shutdown.v1", "engine.migrated.v1", "engine.error.v1"]
+    },
+    "EventTypes": {
+      "bible.translation.installed.v1": {
+        "category": "Bible",
+        "owner": "Bible Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["translation_id", "version"],
+          "properties": {
+            "translation_id": { "type": "string" },
+            "version": { "type": "string" }
+          }
+        }
+      },
+      "speech.transcript-chunk.v1": {
+        "category": "Speech",
+        "owner": "Speech Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "text", "audio_offset_ms", "transcript_offset_ms"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "text": { "type": "string" },
+            "audio_offset_ms": { "type": "integer", "minimum": 0 },
+            "transcript_offset_ms": { "type": "integer", "minimum": 0 },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      },
+      "speech.session-started.v1": {
+        "category": "Speech",
+        "owner": "Speech Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "language", "model"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "language": { "type": "string" },
+            "model": { "type": "string" }
+          }
+        }
+      },
+      "speech.session-ended.v1": {
+        "category": "Speech",
+        "owner": "Speech Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "duration_ms"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "duration_ms": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "speech.error.v1": {
+        "category": "Speech",
+        "owner": "Speech Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "error_code", "error_message"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "error_code": { "enum": ["model_missing", "asr_unavailable", "audio_decode_error", "timeout"] },
+            "error_message": { "type": "string" }
+          }
+        }
+      },
+      "scripture.detected.v1": {
+        "category": "Detection",
+        "owner": "Detection Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "scripture_ref", "confidence", "detection_source"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "scripture_ref": {
+              "type": "object",
+              "required": ["translation_id", "book_id", "chapter", "verse_start", "verse_end"],
+              "properties": {
+                "translation_id": { "type": "string" },
+                "book_id": { "type": "string" },
+                "chapter": { "type": "integer" },
+                "verse_start": { "type": "integer" },
+                "verse_end": { "type": "integer" }
+              }
+            },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "detection_source": { "enum": ["Regex", "QuotationExact", "QuotationNear", "Semantic", "Manual"] },
+            "audio_offset_ms": { "type": ["integer", "null"] },
+            "transcript_offset_ms": { "type": ["integer", "null"] },
+            "matched_text": { "type": "string" }
+          }
+        }
+      },
+      "scripture.quoted.v1": {
+        "category": "Detection",
+        "owner": "Detection Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "scripture_ref", "quotation_text", "confidence"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "scripture_ref": { "type": "object" },
+            "quotation_text": { "type": "string" },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      },
+      "detection.candidate-emitted.v1": {
+        "category": "Detection",
+        "owner": "Detection Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "candidate", "source", "confidence"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "candidate": { "type": "object" },
+            "source": { "enum": ["Regex", "QuotationExact", "QuotationNear", "Semantic"] },
+            "confidence": { "type": "number" }
+          }
+        }
+      },
+      "detection.merged.v1": {
+        "category": "Detection",
+        "owner": "Detection Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "selected", "discarded"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "selected": { "type": "object" },
+            "discarded": { "type": "array", "items": { "type": "object" } }
+          }
+        }
+      },
+      "detection.rejected.v1": {
+        "category": "Detection",
+        "owner": "Detection Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "candidate", "reason"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "candidate": { "type": "object" },
+            "reason": { "type": "string" }
+          }
+        }
+      },
+      "kg-node.created.v1": {
+        "category": "KnowledgeGraph",
+        "owner": "KG Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["node_id", "node_type", "version"],
+          "properties": {
+            "node_id": { "type": "string" },
+            "node_type": { "type": "string" },
+            "version": { "type": "integer", "minimum": 1 },
+            "created_by": { "type": "string" }
+          }
+        }
+      },
+      "kg-node.updated.v1": {
+        "category": "KnowledgeGraph",
+        "owner": "KG Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["node_id", "node_type", "new_version", "previous_version"],
+          "properties": {
+            "node_id": { "type": "string" },
+            "node_type": { "type": "string" },
+            "new_version": { "type": "integer" },
+            "previous_version": { "type": "integer" },
+            "updated_by": { "type": "string" }
+          }
+        }
+      },
+      "kg-node.deleted.v1": {
+        "category": "KnowledgeGraph",
+        "owner": "KG Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["node_id", "node_type", "version"],
+          "properties": {
+            "node_id": { "type": "string" },
+            "node_type": { "type": "string" },
+            "version": { "type": "integer" }
+          }
+        }
+      },
+      "kg-edge.linked.v1": {
+        "category": "KnowledgeGraph",
+        "owner": "KG Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["edge_id", "edge_type", "source", "target", "version"],
+          "properties": {
+            "edge_id": { "type": "string" },
+            "edge_type": { "type": "string" },
+            "source": { "type": "string" },
+            "target": { "type": "string" },
+            "version": { "type": "integer" }
+          }
+        }
+      },
+      "kg-edge.unlinked.v1": {
+        "category": "KnowledgeGraph",
+        "owner": "KG Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["edge_id"],
+          "properties": {
+            "edge_id": { "type": "string" }
+          }
+        }
+      },
+      "kg-embedding.generated.v1": {
+        "category": "KnowledgeGraph",
+        "owner": "KG Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["node_id", "model_id", "dimensions"],
+          "properties": {
+            "node_id": { "type": "string" },
+            "model_id": { "type": "string" },
+            "dimensions": { "type": "integer" }
+          }
+        }
+      },
+      "study-session.started.v1": {
+        "category": "StudySession",
+        "owner": "Live Sermon Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "session_type", "translation_id", "recording_enabled"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "session_type": { "enum": ["LiveSermon", "BibleStudy", "Lecture", "DevotionalReading", "ChatSession"] },
+            "translation_id": { "type": "string" },
+            "recording_enabled": { "type": "boolean" }
+          }
+        }
+      },
+      "study-session.paused.v1": {
+        "category": "StudySession",
+        "owner": "Live Sermon Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "paused_at"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "paused_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "study-session.resumed.v1": {
+        "category": "StudySession",
+        "owner": "Live Sermon Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "resumed_at"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "resumed_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "study-session.ended.v1": {
+        "category": "StudySession",
+        "owner": "Live Sermon Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "ended_at", "duration_ms"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "ended_at": { "type": "integer", "format": "int64" },
+            "duration_ms": { "type": "integer", "minimum": 0 },
+            "detection_count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "study-session.enriching.v1": {
+        "category": "StudySession",
+        "owner": "AI Runtime",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "agents_spawned"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "agents_spawned": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "study-session.archived.v1": {
+        "category": "StudySession",
+        "owner": "Live Sermon Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "archived_at"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "archived_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "study-question.asked.v1": {
+        "category": "StudySession",
+        "owner": "AI Bible Chat",
+        "payload_schema": {
+          "type": "object",
+          "required": ["question_id", "session_id", "question_text"],
+          "properties": {
+            "question_id": { "type": "string" },
+            "session_id": { "type": "string" },
+            "question_text": { "type": "string" },
+            "context_refs": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "note.created.v1": {
+        "category": "Note",
+        "owner": "Personal Bible Study",
+        "payload_schema": {
+          "type": "object",
+          "required": ["note_id", "session_id", "content", "author_id"],
+          "properties": {
+            "note_id": { "type": "string" },
+            "session_id": { "type": "string" },
+            "content": { "type": "string" },
+            "author_id": { "type": "string" },
+            "attached_to": { "type": "string" }
+          }
+        }
+      },
+      "note.updated.v1": {
+        "category": "Note",
+        "owner": "Personal Bible Study",
+        "payload_schema": {
+          "type": "object",
+          "required": ["note_id", "new_content", "updated_at"],
+          "properties": {
+            "note_id": { "type": "string" },
+            "new_content": { "type": "string" },
+            "updated_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "note.deleted.v1": {
+        "category": "Note",
+        "owner": "Personal Bible Study",
+        "payload_schema": {
+          "type": "object",
+          "required": ["note_id", "deleted_at"],
+          "properties": {
+            "note_id": { "type": "string" },
+            "deleted_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "note.linked.v1": {
+        "category": "Note",
+        "owner": "Personal Bible Study",
+        "payload_schema": {
+          "type": "object",
+          "required": ["note_id", "linked_node_id", "link_type"],
+          "properties": {
+            "note_id": { "type": "string" },
+            "linked_node_id": { "type": "string" },
+            "link_type": { "type": "string" }
+          }
+        }
+      },
+      "response-feedback.submitted.v1": {
+        "category": "Note",
+        "owner": "AI Bible Chat",
+        "payload_schema": {
+          "type": "object",
+          "required": ["response_id", "rating"],
+          "properties": {
+            "response_id": { "type": "string" },
+            "rating": { "enum": ["positive", "negative"] },
+            "comment": { "type": ["string", "null"] }
+          }
+        }
+      },
+      "devotional.scheduled.v1": {
+        "category": "Devotional",
+        "owner": "Devotionals",
+        "payload_schema": {
+          "type": "object",
+          "required": ["devotional_id", "user_id", "scheduled_for"],
+          "properties": {
+            "devotional_id": { "type": "string" },
+            "user_id": { "type": "string" },
+            "scheduled_for": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "devotional.generated.v1": {
+        "category": "Devotional",
+        "owner": "Devotionals",
+        "payload_schema": {
+          "type": "object",
+          "required": ["devotional_id", "passage_ref", "provider"],
+          "properties": {
+            "devotional_id": { "type": "string" },
+            "passage_ref": { "type": "string" },
+            "provider": { "type": "string" },
+            "latency_ms": { "type": "integer" }
+          }
+        }
+      },
+      "devotional.read.v1": {
+        "category": "Devotional",
+        "owner": "Devotionals",
+        "payload_schema": {
+          "type": "object",
+          "required": ["devotional_id", "read_at"],
+          "properties": {
+            "devotional_id": { "type": "string" },
+            "read_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "devotional.reflected.v1": {
+        "category": "Devotional",
+        "owner": "Devotionals",
+        "payload_schema": {
+          "type": "object",
+          "required": ["devotional_id", "note_id", "reflected_at"],
+          "properties": {
+            "devotional_id": { "type": "string" },
+            "note_id": { "type": "string" },
+            "reflected_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "devotional.archived.v1": {
+        "category": "Devotional",
+        "owner": "Devotionals",
+        "payload_schema": {
+          "type": "object",
+          "required": ["devotional_id", "archived_at"],
+          "properties": {
+            "devotional_id": { "type": "string" },
+            "archived_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "device.registered.v1": {
+        "category": "Device",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["device_id", "public_key", "user_id"],
+          "properties": {
+            "device_id": { "type": "string" },
+            "public_key": { "type": "string" },
+            "user_id": { "type": "string" }
+          }
+        }
+      },
+      "device.paired.v1": {
+        "category": "Device",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["device_id", "peer_device_id", "paired_at"],
+          "properties": {
+            "device_id": { "type": "string" },
+            "peer_device_id": { "type": "string" },
+            "paired_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "device.unpaired.v1": {
+        "category": "Device",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["device_id", "peer_device_id"],
+          "properties": {
+            "device_id": { "type": "string" },
+            "peer_device_id": { "type": "string" }
+          }
+        }
+      },
+      "device.revoked.v1": {
+        "category": "Device",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["device_id", "reason", "revoked_at"],
+          "properties": {
+            "device_id": { "type": "string" },
+            "reason": { "type": "string" },
+            "revoked_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "device.key-rotated.v1": {
+        "category": "Device",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["device_id", "workspace_id", "new_key_version"],
+          "properties": {
+            "device_id": { "type": "string" },
+            "workspace_id": { "type": "string" },
+            "new_key_version": { "type": "integer" }
+          }
+        }
+      },
+      "sync-unit.sent.v1": {
+        "category": "Sync",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["sync_unit_id", "peer_id", "sync_unit_type"],
+          "properties": {
+            "sync_unit_id": { "type": "string" },
+            "peer_id": { "type": "string" },
+            "sync_unit_type": { "enum": ["kg-node-version", "kg-edge-version", "kg-embedding", "event-tail", "metadata"] }
+          }
+        }
+      },
+      "sync-unit.received.v1": {
+        "category": "Sync",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["sync_unit_id", "peer_id", "sync_unit_type"],
+          "properties": {
+            "sync_unit_id": { "type": "string" },
+            "peer_id": { "type": "string" },
+            "sync_unit_type": { "enum": ["kg-node-version", "kg-edge-version", "kg-embedding", "event-tail", "metadata"] }
+          }
+        }
+      },
+      "sync-conflict.detected.v1": {
+        "category": "Sync",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["entity_id", "local_version", "remote_version"],
+          "properties": {
+            "entity_id": { "type": "string" },
+            "local_version": { "type": "integer" },
+            "remote_version": { "type": "integer" }
+          }
+        }
+      },
+      "sync-conflict.resolved.v1": {
+        "category": "Sync",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["entity_id", "resolution"],
+          "properties": {
+            "entity_id": { "type": "string" },
+            "resolution": { "enum": ["LocalWins", "RemoteWins", "Manual", "CRDTMerge"] }
+          }
+        }
+      },
+      "sync-state.snapshot.v1": {
+        "category": "Sync",
+        "owner": "Peer Sync",
+        "payload_schema": {
+          "type": "object",
+          "required": ["snapshot_id", "partition", "device_id"],
+          "properties": {
+            "snapshot_id": { "type": "string" },
+            "partition": { "enum": ["personal", "workspace"] },
+            "device_id": { "type": "string" },
+            "size_bytes": { "type": "integer" }
+          }
+        }
+      },
+      "agent.spawned.v1": {
+        "category": "Agent",
+        "owner": "AI Runtime",
+        "payload_schema": {
+          "type": "object",
+          "required": ["agent_id", "trigger_event", "capability"],
+          "properties": {
+            "agent_id": { "type": "string" },
+            "trigger_event": { "type": "string" },
+            "capability": { "type": "string" }
+          }
+        }
+      },
+      "agent.started.v1": {
+        "category": "Agent",
+        "owner": "AI Runtime",
+        "payload_schema": {
+          "type": "object",
+          "required": ["agent_id", "started_at"],
+          "properties": {
+            "agent_id": { "type": "string" },
+            "started_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "agent.completed.v1": {
+        "category": "Agent",
+        "owner": "AI Runtime",
+        "payload_schema": {
+          "type": "object",
+          "required": ["agent_id", "latency_ms", "provider"],
+          "properties": {
+            "agent_id": { "type": "string" },
+            "latency_ms": { "type": "integer", "minimum": 0 },
+            "provider": { "type": "string" },
+            "output_summary": { "type": "string" }
+          }
+        }
+      },
+      "agent.failed.v1": {
+        "category": "Agent",
+        "owner": "AI Runtime",
+        "payload_schema": {
+          "type": "object",
+          "required": ["agent_id", "reason", "error_chain"],
+          "properties": {
+            "agent_id": { "type": "string" },
+            "reason": { "enum": ["timeout", "validation_failed", "no_provider", "rate_limited", "context_too_large", "internal_error"] },
+            "error_chain": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "agent.cancelled.v1": {
+        "category": "Agent",
+        "owner": "AI Runtime",
+        "payload_schema": {
+          "type": "object",
+          "required": ["agent_id", "cancelled_at", "reason"],
+          "properties": {
+            "agent_id": { "type": "string" },
+            "cancelled_at": { "type": "integer", "format": "int64" },
+            "reason": { "enum": ["user_cancelled", "system_shutdown", "resource_exhausted"] }
+          }
+        }
+      },
+      "plugin.installed.v1": {
+        "category": "Plugin",
+        "owner": "Plugin Host",
+        "payload_schema": {
+          "type": "object",
+          "required": ["plugin_id", "name", "version", "manifest_signature"],
+          "properties": {
+            "plugin_id": { "type": "string" },
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "manifest_signature": { "type": "string" }
+          }
+        }
+      },
+      "plugin.enabled.v1": {
+        "category": "Plugin",
+        "owner": "Plugin Host",
+        "payload_schema": {
+          "type": "object",
+          "required": ["plugin_id", "enabled_at"],
+          "properties": {
+            "plugin_id": { "type": "string" },
+            "enabled_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "plugin.disabled.v1": {
+        "category": "Plugin",
+        "owner": "Plugin Host",
+        "payload_schema": {
+          "type": "object",
+          "required": ["plugin_id", "disabled_at", "reason"],
+          "properties": {
+            "plugin_id": { "type": "string" },
+            "disabled_at": { "type": "integer", "format": "int64" },
+            "reason": { "type": "string" }
+          }
+        }
+      },
+      "plugin.uninstalled.v1": {
+        "category": "Plugin",
+        "owner": "Plugin Host",
+        "payload_schema": {
+          "type": "object",
+          "required": ["plugin_id", "uninstalled_at"],
+          "properties": {
+            "plugin_id": { "type": "string" },
+            "uninstalled_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "plugin.error.v1": {
+        "category": "Plugin",
+        "owner": "Plugin Host",
+        "payload_schema": {
+          "type": "object",
+          "required": ["plugin_id", "error_code", "error_message"],
+          "properties": {
+            "plugin_id": { "type": "string" },
+            "error_code": { "enum": ["capability_denied", "resource_exhausted", "timeout", "internal_error", "invalid_request"] },
+            "error_message": { "type": "string" }
+          }
+        }
+      },
+      "user.action.v1": {
+        "category": "User",
+        "owner": "UI",
+        "payload_schema": {
+          "type": "object",
+          "required": ["action_type", "timestamp"],
+          "properties": {
+            "action_type": { "type": "string" },
+            "context": { "type": "object" }
+          }
+        }
+      },
+      "user.preference-changed.v1": {
+        "category": "User",
+        "owner": "UI",
+        "payload_schema": {
+          "type": "object",
+          "required": ["preference_key", "new_value"],
+          "properties": {
+            "preference_key": { "type": "string" },
+            "new_value": { "type": "string" }
+          }
+        }
+      },
+      "org.member-added.v1": {
+        "category": "OrgWorkspace",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["org_id", "member_id", "role", "added_at"],
+          "properties": {
+            "org_id": { "type": "string" },
+            "member_id": { "type": "string" },
+            "role": { "enum": ["Owner", "Admin", "Pastor", "Instructor", "Member", "Viewer"] },
+            "added_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "org.member-removed.v1": {
+        "category": "OrgWorkspace",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["org_id", "member_id", "removed_at"],
+          "properties": {
+            "org_id": { "type": "string" },
+            "member_id": { "type": "string" },
+            "removed_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "workspace.created.v1": {
+        "category": "OrgWorkspace",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["workspace_id", "org_id", "created_at"],
+          "properties": {
+            "workspace_id": { "type": "string" },
+            "org_id": { "type": "string" },
+            "created_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "workspace.archived.v1": {
+        "category": "OrgWorkspace",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["workspace_id", "archived_at"],
+          "properties": {
+            "workspace_id": { "type": "string" },
+            "archived_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "workspace.member-added.v1": {
+        "category": "OrgWorkspace",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["workspace_id", "member_id", "added_at"],
+          "properties": {
+            "workspace_id": { "type": "string" },
+            "member_id": { "type": "string" },
+            "added_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "workspace.member-removed.v1": {
+        "category": "OrgWorkspace",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["workspace_id", "member_id", "removed_at"],
+          "properties": {
+            "workspace_id": { "type": "string" },
+            "member_id": { "type": "string" },
+            "removed_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "workspace.key-rotated.v1": {
+        "category": "OrgWorkspace",
+        "owner": "Control Plane",
+        "payload_schema": {
+          "type": "object",
+          "required": ["workspace_id", "new_key_version", "rotated_at"],
+          "properties": {
+            "workspace_id": { "type": "string" },
+            "new_key_version": { "type": "integer" },
+            "rotated_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "media.capture-started.v1": {
+        "category": "Media",
+        "owner": "Media Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "device", "sample_rate", "channels"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "device": { "type": "string" },
+            "sample_rate": { "type": "integer" },
+            "channels": { "type": "integer" }
+          }
+        }
+      },
+      "media.capture-stopped.v1": {
+        "category": "Media",
+        "owner": "Media Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["session_id", "file_path"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "file_path": { "type": "string" }
+          }
+        }
+      },
+      "media.playback-started.v1": {
+        "category": "Media",
+        "owner": "Media Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["asset_id", "started_at"],
+          "properties": {
+            "asset_id": { "type": "string" },
+            "started_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "media.playback-stopped.v1": {
+        "category": "Media",
+        "owner": "Media Engine",
+        "payload_schema": {
+          "type": "object",
+          "required": ["asset_id", "stopped_at"],
+          "properties": {
+            "asset_id": { "type": "string" },
+            "stopped_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "engine.ready.v1": {
+        "category": "System",
+        "owner": "Engine Core",
+        "payload_schema": {
+          "type": "object",
+          "required": ["ready_at", "engine_version"],
+          "properties": {
+            "ready_at": { "type": "integer", "format": "int64" },
+            "engine_version": { "type": "string" }
+          }
+        }
+      },
+      "engine.shutdown.v1": {
+        "category": "System",
+        "owner": "Engine Core",
+        "payload_schema": {
+          "type": "object",
+          "required": ["shutdown_at", "reason"],
+          "properties": {
+            "shutdown_at": { "type": "integer", "format": "int64" },
+            "reason": { "enum": ["user_initiated", "system_update", "crash", "resource_exhausted"] }
+          }
+        }
+      },
+      "engine.migrated.v1": {
+        "category": "System",
+        "owner": "Engine Core",
+        "payload_schema": {
+          "type": "object",
+          "required": ["migration_name", "from_version", "to_version", "migrated_at"],
+          "properties": {
+            "migration_name": { "type": "string" },
+            "from_version": { "type": "string" },
+            "to_version": { "type": "string" },
+            "migrated_at": { "type": "integer", "format": "int64" }
+          }
+        }
+      },
+      "engine.error.v1": {
+        "category": "System",
+        "owner": "Engine Core",
+        "payload_schema": {
+          "type": "object",
+          "required": ["error_code", "error_message", "timestamp"],
+          "properties": {
+            "error_code": { "type": "string" },
+            "error_message": { "type": "string" },
+            "stack_trace": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "envelope": { "$ref": "#/definitions/EventEnvelope" },
+    "categories": { "$ref": "#/definitions/Categories" },
+    "event_types": { "$ref": "#/definitions/EventTypes" }
+  }
+}

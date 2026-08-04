@@ -1,0 +1,923 @@
+openapi: 3.1.0
+info:
+  title: Edify Control Plane Public API
+  description: |
+    Public HTTP API for the Edify control plane. Exposes identity, organization,
+    workspace, member, device, marketplace, and billing operations. All operations
+    are tenant-scoped; cross-tenant access is forbidden by the DO routing (see
+    docs/rfcs/0003-control-plane.md).
+
+    The API is serverless (Cloudflare Workers) with per-DO state. The Hono framework
+    is used for routing and middleware. Authentication is passkey-first (WebAuthn);
+    session tokens are JWTs with 1-hour lifetime.
+
+    All endpoints use HTTPS only. All requests carry an `Authorization: Bearer <sessionToken>`
+    header. Per-action authorization is enforced at the Worker and DO layers.
+
+    See docs/architecture/control-plane.md for the architecture, docs/rfcs/0008-identity-and-key-management.md
+    for the identity model, and docs/decisions/ADR-0009-cloudflare-control-plane.md for the underlying primitives.
+  version: 1.0.0
+  contact:
+    name: Edify API Support
+    email: api@edify.example
+  license:
+    name: TBD
+    url: https://edify.example/license
+
+servers:
+  - url: https://api.edify.example/v1
+    description: Production
+  - url: https://api-staging.edify.example/v1
+    description: Staging
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Identity
+    description: Passkey registration, authentication, session management
+  - name: Organizations
+    description: Organization creation, configuration, member management
+  - name: Workspaces
+    description: Workspace creation, member management, content key rotation
+  - name: Members
+    description: Member profiles, role assignment, device ownership
+  - name: Devices
+    description: Device registration, capability grants, revocation
+  - name: Sync
+    description: Sync relay (last-resort), key delivery
+  - name: Marketplace
+    description: Plugin and template listings, install, review
+  - name: Billing
+    description: Subscription, invoices, payment methods
+  - name: Telemetry
+    description: Opt-in anonymized metrics
+  - name: Webhooks
+    description: Outbound webhooks for organization events
+
+paths:
+  # === Identity ===
+  /auth/challenge:
+    post:
+      tags: [Identity]
+      summary: Request an authentication challenge
+      description: |
+        Returns a server-issued challenge that the client must sign with their
+        passkey private key. The challenge is single-use and expires in 5 minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_id]
+              properties:
+                member_id: { type: string }
+      responses:
+        '200':
+          description: Challenge issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challenge, expires_at]
+                properties:
+                  challenge: { type: string, description: 'Base64-encoded challenge' }
+                  expires_at: { type: integer, format: int64 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/passkey:
+    post:
+      tags: [Identity]
+      summary: Authenticate with a passkey
+      description: |
+        The client submits the member ID and the signed challenge. The server
+        verifies the signature against the stored public key and issues a session
+        token (1-hour lifetime) and refresh token (30-day lifetime).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_id, signed_challenge, challenge]
+              properties:
+                member_id: { type: string }
+                signed_challenge: { type: string, description: 'Base64-encoded signed challenge' }
+                challenge: { type: string }
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionToken'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/refresh:
+    post:
+      tags: [Identity]
+      summary: Refresh an expired session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: New session issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionToken'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      tags: [Identity]
+      summary: Invalidate the current session
+      responses:
+        '204': { description: Logged out }
+
+  /auth/recovery:
+    post:
+      tags: [Identity]
+      summary: Recover account using a recovery code
+      description: |
+        Account recovery when the user has lost all devices. Uses one of the
+        10 recovery codes issued at registration. The user is prompted to
+        register a new passkey; all existing devices are revoked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_id, recovery_code, new_passkey]
+              properties:
+                member_id: { type: string }
+                recovery_code: { type: string }
+                new_passkey:
+                  $ref: '#/components/schemas/PasskeyRegistration'
+      responses:
+        '200':
+          description: Recovery successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionToken'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # === Organizations ===
+  /organizations:
+    post:
+      tags: [Organizations]
+      summary: Create a new organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                plan: { enum: [free, team, ministry, enterprise], default: free }
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+    get:
+      tags: [Organizations]
+      summary: List organizations the current user belongs to
+      responses:
+        '200':
+          description: List of organizations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Organization' }
+
+  /organizations/{org_id}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+    get:
+      tags: [Organizations]
+      summary: Get organization details
+      responses:
+        '200':
+          description: Organization details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '404': { $ref: '#/components/responses/NotFound' }
+
+    patch:
+      tags: [Organizations]
+      summary: Update organization (Owner/Admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                plan: { enum: [free, team, ministry, enterprise] }
+                settings: { type: object }
+      responses:
+        '200':
+          description: Organization updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    delete:
+      tags: [Organizations]
+      summary: Delete organization (Owner only; destructive)
+      responses:
+        '204': { description: Organization deleted }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /organizations/{org_id}/members:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+    get:
+      tags: [Organizations, Members]
+      summary: List organization members
+      responses:
+        '200':
+          description: List of members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Member' }
+
+    post:
+      tags: [Organizations, Members]
+      summary: Invite a new member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email: { type: string, format: email }
+                role: { enum: [Owner, Admin, Pastor, Instructor, Member, Viewer] }
+      responses:
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+
+  /organizations/{org_id}/members/{member_id}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - $ref: '#/components/parameters/MemberId'
+    delete:
+      tags: [Organizations, Members]
+      summary: Remove a member
+      responses:
+        '204': { description: Member removed }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+    patch:
+      tags: [Organizations, Members]
+      summary: Update member role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { enum: [Owner, Admin, Pastor, Instructor, Member, Viewer] }
+      responses:
+        '200':
+          description: Member updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+
+  # === Workspaces ===
+  /organizations/{org_id}/workspaces:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+    post:
+      tags: [Workspaces]
+      summary: Create a workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                settings: { type: object }
+      responses:
+        '201':
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+
+  /workspaces/{workspace_id}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      tags: [Workspaces]
+      summary: Get workspace details
+      responses:
+        '200':
+          description: Workspace details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+
+    patch:
+      tags: [Workspaces]
+      summary: Update workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                settings: { type: object }
+      responses:
+        '200':
+          description: Workspace updated
+
+  /workspaces/{workspace_id}/members:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Workspaces, Members]
+      summary: Add a member to a workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [member_id]
+              properties:
+                member_id: { type: string }
+      responses:
+        '201':
+          description: Member added
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /workspaces/{workspace_id}/members/{member_id}:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/MemberId'
+    delete:
+      tags: [Workspaces, Members]
+      summary: Remove member from workspace
+      responses:
+        '204': { description: Member removed }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /workspaces/{workspace_id}/key/rotate:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Workspaces]
+      summary: Rotate the workspace content key
+      description: |
+        Generates a new content key and re-wraps it for all current member devices.
+        Old keys are retained for decryption of historical data. This is a
+        destructive operation; it requires Owner or Admin role.
+      responses:
+        '200':
+          description: Key rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  new_key_version: { type: integer }
+
+  # === Devices ===
+  /devices:
+    post:
+      tags: [Devices]
+      summary: Register a new device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public_key, attestation, device_name, device_type]
+              properties:
+                public_key: { type: string }
+                attestation: { type: string }
+                device_name: { type: string }
+                device_type: { enum: [mobile, desktop, web] }
+      responses:
+        '201':
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+
+    get:
+      tags: [Devices]
+      summary: List devices owned by the current member
+      responses:
+        '200':
+          description: List of devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Device' }
+
+  /devices/{device_id}:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    get:
+      tags: [Devices]
+      summary: Get device details
+      responses:
+        '200':
+          description: Device details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+
+    delete:
+      tags: [Devices]
+      summary: Revoke a device
+      description: |
+        Revokes the device, removes its public key from pkarr, and triggers
+        workspace key rotation if the device had a wrapped key. Cannot be undone
+        from the API (the user would need to re-pair).
+      responses:
+        '204': { description: Device revoked }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /devices/{device_id}/key:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    put:
+      tags: [Devices]
+      summary: Rotate the device's public key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_public_key]
+              properties:
+                new_public_key: { type: string }
+      responses:
+        '200':
+          description: Key rotated
+
+  /devices/{device_id}/pair:
+    parameters:
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      tags: [Devices]
+      summary: Initiate pairing
+      description: |
+        Generates a pairing code (QR + 5-character alphanumeric) for the device
+        to display. The code expires in 5 minutes. The existing device scans
+        or enters the code to complete pairing.
+      responses:
+        '200':
+          description: Pairing code issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pairing_code: { type: string, minLength: 5, maxLength: 5 }
+                  pairing_qr: { type: string, description: 'Base64-encoded QR code' }
+                  expires_at: { type: integer, format: int64 }
+
+  /workspaces/{workspace_id}/sync-relay/connect:
+    parameters:
+      - $ref: '#/components/parameters/WorkspaceId'
+    post:
+      tags: [Sync]
+      summary: Connect to the sync relay (last-resort)
+      description: |
+        Opens a WebSocket connection to the Cloudflare Durable Object that acts
+        as a last-resort sync relay. The relay sees only ciphertext. Direct iroh
+        QUIC and iroh's public relay mesh are preferred; this endpoint is used
+        only when both fail.
+      responses:
+        '101': { description: WebSocket upgrade; sync stream established }
+
+  # === Marketplace ===
+  /marketplace/listings:
+    get:
+      tags: [Marketplace]
+      summary: Browse marketplace listings
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: query
+          in: query
+          schema: { type: string, description: 'Search query' }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: List of listings
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MarketplaceListing' }
+
+  /marketplace/listings/{listing_id}:
+    parameters:
+      - name: listing_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Marketplace]
+      summary: Get listing details
+      responses:
+        '200':
+          description: Listing details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketplaceListing'
+
+  /marketplace/listings/{listing_id}/install:
+    parameters:
+      - name: listing_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Marketplace]
+      summary: Install a listing
+      description: |
+        Initiates installation of a plugin or template. The signed bundle is
+        downloaded; the manifest is verified; the user is prompted to approve
+        capabilities.
+      responses:
+        '202':
+          description: Install initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  install_id: { type: string }
+                  download_url: { type: string, format: uri }
+
+  # === Billing ===
+  /billing/subscription:
+    get:
+      tags: [Billing]
+      summary: Get current subscription
+      responses:
+        '200':
+          description: Current subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+
+  /billing/subscription/plan:
+    put:
+      tags: [Billing]
+      summary: Change subscription plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              properties:
+                plan: { enum: [free, team, ministry, enterprise] }
+      responses:
+        '200':
+          description: Plan changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+
+  /billing/invoices:
+    get:
+      tags: [Billing]
+      summary: List invoices
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: List of invoices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Invoice' }
+
+  # === Telemetry ===
+  /telemetry:
+    post:
+      tags: [Telemetry]
+      summary: Submit anonymized telemetry
+      description: |
+        Submits opt-in, anonymized telemetry. The telemetry is aggregated by
+        the control plane; raw user data is never sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [metric_name, value]
+              properties:
+                metric_name: { type: string }
+                value: { type: number }
+                tags: { type: object }
+      responses:
+        '202': { description: Telemetry accepted }
+
+  # === Webhooks ===
+  /webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Register a webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string, format: uri }
+                events:
+                  type: array
+                  items: { type: string }
+                secret: { type: string, description: 'HMAC secret for signature verification' }
+      responses:
+        '201':
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Session token issued by /auth/passkey. JWT with 1-hour lifetime.
+        Claims: `{sub, org_id, role, iat, exp, jti}`.
+
+  parameters:
+    OrgId:
+      name: org_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Organization ID (UUID v7)
+    MemberId:
+      name: member_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Member ID (UUID v7)
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Device ID (UUID v7)
+    WorkspaceId:
+      name: workspace_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Workspace ID (UUID v7)
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Unauthorized (invalid or expired session)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Forbidden (insufficient permissions)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Rate limited
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        request_id: { type: string }
+
+    SessionToken:
+      type: object
+      required: [session_token, refresh_token, expires_at, member_id]
+      properties:
+        session_token: { type: string, description: 'JWT' }
+        refresh_token: { type: string }
+        expires_at: { type: integer, format: int64 }
+        member_id: { type: string }
+
+    PasskeyRegistration:
+      type: object
+      required: [public_key, attestation, device_name, device_type]
+      properties:
+        public_key: { type: string }
+        attestation: { type: string }
+        device_name: { type: string }
+        device_type: { enum: [mobile, desktop, web] }
+
+    Organization:
+      type: object
+      required: [id, name, owner_id, plan, created_at, state]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        owner_id: { type: string }
+        plan: { enum: [free, team, ministry, enterprise] }
+        state: { enum: [provisioning, active, suspended, cancelled, deleted] }
+        settings: { type: object }
+        created_at: { type: integer, format: int64 }
+
+    Workspace:
+      type: object
+      required: [id, name, organization_id, content_key_version, state]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        organization_id: { type: string }
+        content_key_version: { type: integer }
+        state: { enum: [provisioning, active, archived, cancelled, deleted] }
+        settings: { type: object }
+        created_at: { type: integer, format: int64 }
+
+    Member:
+      type: object
+      required: [id, organization_id, user_id, role]
+      properties:
+        id: { type: string }
+        organization_id: { type: string }
+        user_id: { type: string }
+        role: { enum: [Owner, Admin, Pastor, Instructor, Member, Viewer] }
+        workspace_ids:
+          type: array
+          items: { type: string }
+        joined_at: { type: integer, format: int64 }
+
+    Invitation:
+      type: object
+      required: [id, email, role, invitation_code, expires_at]
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { enum: [Owner, Admin, Pastor, Instructor, Member, Viewer] }
+        invitation_code: { type: string, description: '6-character alphanumeric' }
+        expires_at: { type: integer, format: int64 }
+        created_at: { type: integer, format: int64 }
+
+    Device:
+      type: object
+      required: [id, user_id, public_key, device_name, device_type, last_seen, capabilities, revoked]
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        public_key: { type: string }
+        device_name: { type: string }
+        device_type: { enum: [mobile, desktop, web] }
+        last_seen: { type: integer, format: int64 }
+        capabilities:
+          type: array
+          items: { type: string }
+        revoked: { type: boolean }
+
+    MarketplaceListing:
+      type: object
+      required: [id, name, version, author, category, signature, capabilities, install_count]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: string }
+        author: { type: object }
+        category: { enum: [bible-translation, detection-heuristic, ai-agent, ui-theme, study-template, commentary, original-language, integration, other] }
+        signature: { type: string }
+        manifest: { type: object }
+        description: { type: string }
+        install_count: { type: integer }
+        rating: { type: number, minimum: 0, maximum: 5 }
+        created_at: { type: integer, format: int64 }
+
+    Subscription:
+      type: object
+      required: [org_id, plan, status, current_period_end]
+      properties:
+        org_id: { type: string }
+        plan: { enum: [free, team, ministry, enterprise] }
+        status: { enum: [active, past_due, cancelled, suspended] }
+        current_period_start: { type: integer, format: int64 }
+        current_period_end: { type: integer, format: int64 }
+        seats_used: { type: integer }
+        seats_total: { type: integer }
+
+    Invoice:
+      type: object
+      required: [id, amount_usd, status, period_start, period_end]
+      properties:
+        id: { type: string }
+        amount_usd: { type: number }
+        currency: { type: string, default: 'USD' }
+        status: { enum: [draft, open, paid, void, uncollectible] }
+        period_start: { type: integer, format: int64 }
+        period_end: { type: integer, format: int64 }
+        paid_at: { type: integer, format: int64 }
+        invoice_url: { type: string, format: uri }
+
+    Webhook:
+      type: object
+      required: [id, url, events, secret, created_at]
+      properties:
+        id: { type: string }
+        url: { type: string, format: uri }
+        events:
+          type: array
+          items: { type: string }
+        secret: { type: string }
+        created_at: { type: integer, format: int64 }
+        last_triggered_at: { type: integer, format: int64 }

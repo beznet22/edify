@@ -1,0 +1,486 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://edify.example/schemas/kg-schema/v1",
+  "title": "Edify Knowledge Graph Schema",
+  "description": "Machine-readable schema for the Edify Knowledge Graph. Defines all node types, edge types, property types, and versioning rules. This is the canonical source of truth for the `schema-kg` SemVer track. See docs/rfcs/0002-knowledge-graph.md and docs/rfcs/0009-kg-schema-details.md for the prose specification.",
+  "version": "1.0.0",
+  "type": "object",
+  "definitions": {
+    "NodeId": {
+      "type": "object",
+      "required": ["node_type", "id"],
+      "properties": {
+        "node_type": { "type": "string", "description": "Canonical node type name" },
+        "id": { "type": "string", "description": "Type-specific identifier (UUID v7 for generated, composite for stable)" }
+      }
+    },
+    "PropertyValue": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "integer" },
+        { "type": "boolean" },
+        { "type": "string", "format": "date-time" },
+        { "type": "object", "required": ["enum", "allowed"], "properties": {
+            "enum": { "type": "string" },
+            "allowed": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        { "type": "object", "required": ["ref"], "properties": { "ref": { "$ref": "#/definitions/NodeId" } } },
+        { "type": "object", "required": ["list"], "properties": { "list": { "type": "array", "items": { "$ref": "#/definitions/PropertyValue" } } } },
+        { "type": "object", "required": ["map"], "properties": { "map": { "type": "object", "additionalProperties": { "$ref": "#/definitions/PropertyValue" } } } },
+        { "type": "null" }
+      ]
+    },
+    "PropertyMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/PropertyValue" }
+    },
+    "NodeVersion": {
+      "type": "object",
+      "required": ["id", "version", "properties", "created_at", "created_by", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/definitions/NodeId" },
+        "version": { "type": "integer", "minimum": 1, "description": "Monotonic; starts at 1" },
+        "properties": { "$ref": "#/definitions/PropertyMap" },
+        "created_at": { "type": "integer", "format": "int64", "description": "Unix epoch seconds" },
+        "created_by": { "$ref": "#/definitions/ActorId" },
+        "supersedes_version": { "type": ["integer", "null"], "minimum": 1 },
+        "provenance": { "$ref": "#/definitions/Provenance" },
+        "deleted": { "type": "boolean", "default": false }
+      }
+    },
+    "EdgeId": {
+      "type": "object",
+      "required": ["edge_type", "source", "target", "version"],
+      "properties": {
+        "edge_type": { "type": "string" },
+        "source": { "$ref": "#/definitions/NodeId" },
+        "target": { "$ref": "#/definitions/NodeId" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "EdgeVersion": {
+      "type": "object",
+      "required": ["id", "source", "target", "edge_type", "properties", "created_at", "created_by", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/definitions/EdgeId" },
+        "source": { "$ref": "#/definitions/NodeId" },
+        "target": { "$ref": "#/definitions/NodeId" },
+        "edge_type": { "type": "string" },
+        "properties": { "$ref": "#/definitions/PropertyMap" },
+        "created_at": { "type": "integer", "format": "int64" },
+        "created_by": { "$ref": "#/definitions/ActorId" },
+        "supersedes_version": { "type": ["integer", "null"] },
+        "provenance": { "$ref": "#/definitions/Provenance" },
+        "deleted": { "type": "boolean", "default": false }
+      }
+    },
+    "ActorId": {
+      "type": "object",
+      "required": ["actor_type", "id"],
+      "properties": {
+        "actor_type": { "enum": ["Member", "Agent", "Device", "System"] },
+        "id": { "type": "string" }
+      }
+    },
+    "Provenance": {
+      "type": "object",
+      "required": ["source", "actor"],
+      "properties": {
+        "source": { "enum": ["User", "Agent", "Sync", "Plugin", "System"] },
+        "actor": { "$ref": "#/definitions/ActorId" },
+        "reason": { "type": ["string", "null"] },
+        "correlation_id": { "type": ["string", "null"] }
+      }
+    },
+    "NodeTypes": {
+      "Scripture": {
+        "id_format": "{translation_id}:{book_id}:{chapter}:{verse_start}:{verse_end}",
+        "id_example": "KJV:JHN:3:16:16",
+        "required_properties": ["translation_id", "book_id", "chapter", "verse_start", "verse_end", "text"],
+        "optional_properties": ["original_hebrew", "original_greek", "strong_number", "morphology"],
+        "property_types": {
+          "translation_id": { "type": "string", "enum_values": ["KJV", "NIV", "ESV", "NASB", "NKJV", "NRSV", "ESVUK", "NASBUK"] },
+          "book_id": { "type": "string", "pattern": "^[A-Z1-3]{2,3}$" },
+          "chapter": { "type": "integer", "minimum": 1, "maximum": 150 },
+          "verse_start": { "type": "integer", "minimum": 1 },
+          "verse_end": { "type": "integer", "minimum": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "original_hebrew": { "type": "string" },
+          "original_greek": { "type": "string" },
+          "strong_number": { "type": "string", "pattern": "^[HG][0-9]+$" },
+          "morphology": { "type": "string" }
+        }
+      },
+      "ScripturePassage": {
+        "id_format": "uuid-v7",
+        "required_properties": ["session_id", "scripture_ref", "confidence", "detection_source"],
+        "optional_properties": ["audio_offset_ms", "transcript_offset_ms"],
+        "property_types": {
+          "session_id": { "type": "string" },
+          "scripture_ref": { "$ref": "#/definitions/NodeId" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "detection_source": { "enum": ["Regex", "QuotationExact", "QuotationNear", "Semantic", "Manual"] },
+          "audio_offset_ms": { "type": "integer", "minimum": 0 },
+          "transcript_offset_ms": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "Concept": {
+        "id_format": "uuid-v7",
+        "required_properties": ["name"],
+        "optional_properties": ["aliases", "description", "tradition_tags"],
+        "property_types": {
+          "name": { "type": "string", "minLength": 1 },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" },
+          "tradition_tags": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Person": {
+        "id_format": "uuid-v7",
+        "required_properties": ["name"],
+        "optional_properties": ["aliases", "description", "birth_year", "death_year", "category", "tradition_tags"],
+        "property_types": {
+          "name": { "type": "string", "minLength": 1 },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" },
+          "birth_year": { "type": "integer" },
+          "death_year": { "type": "integer" },
+          "category": { "enum": ["Biblical", "Historical", "Contemporary", "Fictional"] },
+          "tradition_tags": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Place": {
+        "id_format": "uuid-v7",
+        "required_properties": ["name"],
+        "optional_properties": ["aliases", "description", "coordinates", "category", "tradition_tags"],
+        "property_types": {
+          "name": { "type": "string", "minLength": 1 },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" },
+          "coordinates": { "type": "object", "properties": { "lat": { "type": "number" }, "lon": { "type": "number" } } },
+          "category": { "enum": ["Biblical", "Historical", "Contemporary"] },
+          "tradition_tags": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Sermon": {
+        "id_format": "uuid-v7",
+        "required_properties": ["title", "pastor_id", "preached_at", "session_id"],
+        "optional_properties": ["scripture_refs", "summary"],
+        "property_types": {
+          "title": { "type": "string", "minLength": 1 },
+          "pastor_id": { "$ref": "#/definitions/NodeId" },
+          "preached_at": { "type": "integer", "format": "int64" },
+          "session_id": { "$ref": "#/definitions/NodeId" },
+          "scripture_refs": { "type": "array", "items": { "$ref": "#/definitions/NodeId" } },
+          "summary": { "type": "string" }
+        }
+      },
+      "Lecture": {
+        "id_format": "uuid-v7",
+        "required_properties": ["title", "instructor_id", "delivered_at", "session_id"],
+        "optional_properties": ["scripture_refs", "summary"],
+        "property_types": {
+          "title": { "type": "string" },
+          "instructor_id": { "$ref": "#/definitions/NodeId" },
+          "delivered_at": { "type": "integer", "format": "int64" },
+          "session_id": { "$ref": "#/definitions/NodeId" },
+          "scripture_refs": { "type": "array", "items": { "$ref": "#/definitions/NodeId" } },
+          "summary": { "type": "string" }
+        }
+      },
+      "StudySession": {
+        "id_format": "uuid-v7",
+        "required_properties": ["session_type", "state", "started_at", "tenant_id", "language", "translation_id"],
+        "optional_properties": ["ended_at", "transcript", "notes", "highlights", "bookmarks", "agents_run", "metadata"],
+        "property_types": {
+          "session_type": { "enum": ["LiveSermon", "BibleStudy", "Lecture", "DevotionalReading", "ChatSession"] },
+          "state": { "enum": ["idle", "capturing", "paused", "ended", "enriching", "archived", "cancelled", "failed", "corrupted"] },
+          "started_at": { "type": "integer", "format": "int64" },
+          "ended_at": { "type": ["integer", "null"], "format": "int64" },
+          "tenant_id": { "type": "string" },
+          "language": { "type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$" },
+          "translation_id": { "type": "string" },
+          "transcript": { "type": "string" },
+          "notes": { "type": "array", "items": { "$ref": "#/definitions/NodeId" } },
+          "highlights": { "type": "array", "items": { "$ref": "#/definitions/NodeId" } },
+          "bookmarks": { "type": "array", "items": { "$ref": "#/definitions/NodeId" } },
+          "agents_run": { "type": "array", "items": { "type": "string" } },
+          "metadata": { "type": "object" }
+        }
+      },
+      "Note": {
+        "id_format": "uuid-v7",
+        "required_properties": ["content", "author_id"],
+        "optional_properties": ["session_id", "attached_to", "attached_to_type"],
+        "property_types": {
+          "content": { "type": "string", "minLength": 1 },
+          "author_id": { "$ref": "#/definitions/NodeId" },
+          "session_id": { "$ref": "#/definitions/NodeId" },
+          "attached_to": { "$ref": "#/definitions/NodeId" },
+          "attached_to_type": { "type": "string" }
+        }
+      },
+      "Highlight": {
+        "id_format": "uuid-v7",
+        "required_properties": ["text", "span", "source_type", "source_id", "author_id"],
+        "optional_properties": [],
+        "property_types": {
+          "text": { "type": "string" },
+          "span": { "type": "object", "properties": { "start": { "type": "integer" }, "end": { "type": "integer" } } },
+          "source_type": { "enum": ["Verse", "Transcript", "Note"] },
+          "source_id": { "$ref": "#/definitions/NodeId" },
+          "author_id": { "$ref": "#/definitions/NodeId" }
+        }
+      },
+      "Bookmark": {
+        "id_format": "uuid-v7",
+        "required_properties": ["session_id", "audio_offset_ms", "transcript_offset_ms", "author_id"],
+        "optional_properties": ["label"],
+        "property_types": {
+          "session_id": { "$ref": "#/definitions/NodeId" },
+          "audio_offset_ms": { "type": "integer", "minimum": 0 },
+          "transcript_offset_ms": { "type": "integer", "minimum": 0 },
+          "author_id": { "$ref": "#/definitions/NodeId" },
+          "label": { "type": "string" }
+        }
+      },
+      "Devotional": {
+        "id_format": "uuid-v7",
+        "required_properties": ["passage", "reflection", "prayer_prompt", "reflection_question", "user_id", "scheduled_for", "provider"],
+        "optional_properties": ["read_at", "reflected_at", "feedback"],
+        "property_types": {
+          "passage": { "$ref": "#/definitions/NodeId" },
+          "reflection": { "type": "string" },
+          "prayer_prompt": { "type": "string" },
+          "reflection_question": { "type": "string" },
+          "user_id": { "$ref": "#/definitions/NodeId" },
+          "scheduled_for": { "type": "integer", "format": "int64" },
+          "provider": { "type": "string" },
+          "read_at": { "type": ["integer", "null"], "format": "int64" },
+          "reflected_at": { "type": ["integer", "null"], "format": "int64" },
+          "feedback": { "enum": ["positive", "negative", "neutral", null] }
+        }
+      },
+      "Organization": {
+        "id_format": "uuid-v7",
+        "required_properties": ["name", "owner_id"],
+        "optional_properties": ["plan", "settings"],
+        "property_types": {
+          "name": { "type": "string", "minLength": 1 },
+          "owner_id": { "$ref": "#/definitions/NodeId" },
+          "plan": { "enum": ["free", "team", "ministry", "enterprise"] },
+          "settings": { "type": "object" }
+        }
+      },
+      "Workspace": {
+        "id_format": "uuid-v7",
+        "required_properties": ["name", "organization_id", "content_key_version"],
+        "optional_properties": ["settings"],
+        "property_types": {
+          "name": { "type": "string", "minLength": 1 },
+          "organization_id": { "$ref": "#/definitions/NodeId" },
+          "content_key_version": { "type": "integer", "minimum": 1 },
+          "settings": { "type": "object" }
+        }
+      },
+      "Member": {
+        "id_format": "uuid-v7",
+        "required_properties": ["organization_id", "user_id"],
+        "optional_properties": ["role", "workspace_ids"],
+        "property_types": {
+          "organization_id": { "$ref": "#/definitions/NodeId" },
+          "user_id": { "$ref": "#/definitions/NodeId" },
+          "role": { "enum": ["Owner", "Admin", "Pastor", "Instructor", "Member", "Viewer"] },
+          "workspace_ids": { "type": "array", "items": { "$ref": "#/definitions/NodeId" } }
+        }
+      },
+      "Device": {
+        "id_format": "uuid-v7",
+        "required_properties": ["public_key"],
+        "optional_properties": ["attestation", "capabilities"],
+        "property_types": {
+          "public_key": { "type": "string" },
+          "attestation": { "type": "string" },
+          "capabilities": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "Plugin": {
+        "id_format": "uuid-v7",
+        "required_properties": ["name", "version", "manifest_signature"],
+        "optional_properties": ["capabilities", "resources"],
+        "property_types": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "manifest_signature": { "type": "string" },
+          "capabilities": { "type": "array", "items": { "type": "string" } },
+          "resources": { "type": "object" }
+        }
+      },
+      "Agent": {
+        "id_format": "uuid-v7",
+        "required_properties": ["name", "version"],
+        "optional_properties": ["subscriptions", "output_contract"],
+        "property_types": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "subscriptions": { "type": "array", "items": { "type": "string" } },
+          "output_contract": { "type": "object" }
+        }
+      },
+      "Asset": {
+        "id_format": "uuid-v7",
+        "required_properties": ["filename", "mime_type", "size_bytes", "storage_path", "checksum"],
+        "optional_properties": ["encryption", "attached_to"],
+        "property_types": {
+          "filename": { "type": "string" },
+          "mime_type": { "type": "string" },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "storage_path": { "type": "string" },
+          "checksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "encryption": { "type": "string" },
+          "attached_to": { "type": "array", "items": { "$ref": "#/definitions/NodeId" } }
+        }
+      }
+    },
+    "EdgeTypes": {
+      "references": {
+        "source_types": ["StudySession", "Sermon", "Lecture", "Note", "Devotional"],
+        "target_types": ["Scripture", "ScripturePassage", "Concept", "Person", "Place"],
+        "required_properties": [],
+        "optional_properties": ["confidence", "offset"]
+      },
+      "quotes": {
+        "source_types": ["StudySession", "Sermon", "Lecture", "Note", "Devotional"],
+        "target_types": ["Scripture", "ScripturePassage"],
+        "required_properties": ["quotation_text"],
+        "optional_properties": ["confidence", "offset"]
+      },
+      "derives-from": {
+        "source_types": ["Note", "Devotional", "Highlight"],
+        "target_types": ["Scripture", "Note", "Concept", "Person"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "attended-by": {
+        "source_types": ["StudySession", "Sermon", "Lecture"],
+        "target_types": ["Member"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "authored-by": {
+        "source_types": ["Note", "Devotional", "Highlight", "Bookmark"],
+        "target_types": ["Member"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "created-by": {
+        "source_types": ["Note", "Devotional", "Concept", "Person", "Place"],
+        "target_types": ["Agent"],
+        "required_properties": [],
+        "optional_properties": ["model"]
+      },
+      "attaches-to": {
+        "source_types": ["Asset"],
+        "target_types": ["Scripture", "Sermon", "Note", "Concept", "Person", "Place"],
+        "required_properties": [],
+        "optional_properties": ["role"]
+      },
+      "part-of": {
+        "source_types": ["Note", "Highlight", "Bookmark", "Devotional"],
+        "target_types": ["StudySession", "Curriculum", "ReadingPlan"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "links-to": {
+        "source_types": ["any"],
+        "target_types": ["any"],
+        "required_properties": [],
+        "optional_properties": ["relationship", "confidence"]
+      },
+      "contradicts": {
+        "source_types": ["Concept", "Note"],
+        "target_types": ["Concept", "Note"],
+        "required_properties": [],
+        "optional_properties": ["confidence"]
+      },
+      "supports": {
+        "source_types": ["Concept", "Note"],
+        "target_types": ["Concept", "Note"],
+        "required_properties": [],
+        "optional_properties": ["confidence"]
+      },
+      "precedes": {
+        "source_types": ["Sermon", "Lecture", "Note", "Devotional"],
+        "target_types": ["Sermon", "Lecture", "Note", "Devotional"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "follows": {
+        "source_types": ["Sermon", "Lecture", "Note", "Devotional"],
+        "target_types": ["Sermon", "Lecture", "Note", "Devotional"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "related-to": {
+        "source_types": ["Concept", "Person", "Place"],
+        "target_types": ["Concept", "Person", "Place"],
+        "required_properties": [],
+        "optional_properties": ["strength"]
+      },
+      "tagged-with": {
+        "source_types": ["Sermon", "Lecture", "Note", "Devotional", "StudySession"],
+        "target_types": ["Concept", "Person", "Place"],
+        "required_properties": [],
+        "optional_properties": ["confidence"]
+      },
+      "member-of": {
+        "source_types": ["Member"],
+        "target_types": ["Organization", "Workspace"],
+        "required_properties": ["role"],
+        "optional_properties": []
+      },
+      "paired-with": {
+        "source_types": ["Device"],
+        "target_types": ["Device"],
+        "required_properties": ["paired_at"],
+        "optional_properties": []
+      },
+      "belongs-to": {
+        "source_types": ["Device"],
+        "target_types": ["Member", "Organization", "Workspace"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "shared-with": {
+        "source_types": ["StudySession", "Note", "Devotional"],
+        "target_types": ["Workspace"],
+        "required_properties": ["shared_at"],
+        "optional_properties": []
+      },
+      "installed-on": {
+        "source_types": ["Plugin"],
+        "target_types": ["Device"],
+        "required_properties": ["installed_at"],
+        "optional_properties": []
+      },
+      "published-by": {
+        "source_types": ["Plugin"],
+        "target_types": ["Member", "Organization"],
+        "required_properties": [],
+        "optional_properties": []
+      },
+      "composed-of": {
+        "source_types": ["Curriculum"],
+        "target_types": ["StudySession", "ReadingPlan", "Flashcard", "Quiz"],
+        "required_properties": [],
+        "optional_properties": ["order"]
+      }
+    }
+  },
+  "properties": {
+    "node_types": { "type": "object", "additionalProperties": { "$ref": "#/definitions/NodeTypes" } },
+    "edge_types": { "type": "object", "additionalProperties": { "$ref": "#/definitions/EdgeTypes" } }
+  }
+}
