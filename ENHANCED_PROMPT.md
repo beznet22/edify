@@ -183,9 +183,48 @@ This is a **first-class requirement**, not a migration afterthought. The fronten
 
 The agent decides the exact endpoint paths, request/response shapes, and error envelopes — but they must be derived from the OpenAI SDK types where possible (per §2.9).
 
-### 3.8 Email — Nodemailer → Cloudflare Email Service
+### 3.8 Email — Gmail API via Service Account JWT (Strategy B — Locked In)
 
-Workers cannot open SMTP sockets. Replace Nodemailer with Cloudflare Email Service. Choose between the Workers Email Sending binding and the Email Routing + REST API path based on the agent's research. Document SPF/DKIM/DMARC prerequisites. Map every existing email call site (OTP, verification, reset, etc.) and preserve templating. Define email templates as typed pure functions with Zod input schemas per §2.3.
+Workers cannot open SMTP sockets. The plan replaces Nodemailer with a direct Gmail API integration using a Google Service Account JWT to obtain an OAuth access token, then POSTs the raw RFC 2822 message to the Gmail REST API. No `nodemailer`, no `googleapis` package — both are incompatible with the Workers runtime (Nodemailer requires SMTP sockets; `googleapis` relies on Node-only modules). All transport is plain `fetch` plus the browser-native `crypto.subtle` API.
+
+**Why this strategy:** the school already sends from a Gmail account, so adopting it preserves the existing sender identity and avoids buying / verifying a new sending domain. The cost is non-trivial JWT-signing boilerplate in the Worker, which the typed helpers in §3.8a address.
+
+**Plan must cover:**
+
+- **Google Cloud setup steps** (committed to the plan as a setup checklist, not as freeform text):
+  1. Create / select a Google Cloud project.
+  2. Enable the Gmail API.
+  3. Create a Service Account with the Gmail API scope (`https://www.googleapis.com/auth/gmail.send`).
+  4. Generate and download the JSON private key.
+  5. For Google Workspace: configure Domain-Wide Authority delegation with the scope above. For personal Gmail: explicitly authorize the target sender address.
+  6. **Rotate and revoke the existing Gmail app password currently in `SMS-BACKEND/.env` (`EMAIL_PASS`)** — it has been in source-controlled `.env` files and must be treated as compromised. Plan must include this as an explicit rollout item.
+- **Worker configuration.** The Service Account JSON is stored as a Worker secret via `wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON`. The current `EMAIL_USER` (`samarali5177@gmail.com`) becomes `[vars].GMAIL_SENDER_EMAIL` (non-secret). All `process.env.EMAIL_*` reads in `src/services/mailService.js` are removed per §3.12a.
+- **Daily-quota guardrail (hard limit, not optional).** Google imposes 500 emails/day for personal Gmail and 2000/day for Google Workspace. The Worker must track per-school sending counts in KV (key `mail:{schoolId}:{yyyy-mm-dd}`) and **fail closed** before hitting the per-account cap. Recommended hard caps in the Worker: 400/day for personal Gmail, 1800/day for Workspace — leave a safety margin and surface a typed `AppError({ kind: 'rate_limited', retryAfterMs: <ms-until-midnight-UTC> })` to the caller when the school is at or near its cap.
+- **Email templates.** Every email template (OTP, verification, reset, magic-link) is a typed pure function with a Zod input schema per §2.3. The renderer is pure (no I/O), so it is unit-testable in isolation. The transport layer calls the renderer, then calls the typed Gmail client (below) with the rendered MIME message.
+- **Map every existing email call site.** Identify all callers of the current `mailService` (grep across `src/controllers/` and `src/middleware/`) and show that each one is ported to call the new typed Gmail client with the same template + input contract.
+
+### 3.8a Typed Web Crypto Helpers (Required)
+
+The JWT-signing path is the most error-prone part of Strategy B and must be type-safe end-to-end per §2. No untyped string concatenation, no `any` in the JWT claim builder, no untyped `btoa` / `atob` calls.
+
+**The plan must define (at minimum) the following typed modules under `src/email/`:**
+
+- `src/email/crypto/base64url.ts` — `base64urlEncode(input: string | Uint8Array): string` and `base64urlDecode(input: string): Uint8Array`. Both fully typed, no `any` in the binary conversion.
+- `src/email/crypto/jwt.ts` — `signJwtRsa256(opts: { privateKeyPkcs8Der: Uint8Array; claims: Record<string, string | number>; header?: { alg: 'RS256'; typ: 'JWT' }; }): Promise<string>` — produces a complete compact JWS string typed as `JwtString` (branded). Internally uses `crypto.subtle.importKey` with `RSASSA-PKCS1-v1_5` + `SHA-256` and `crypto.subtle.sign`. Pure function, no I/O.
+- `src/email/crypto/parseServiceAccount.ts` — `parseServiceAccountJson(raw: string): ServiceAccount` where `ServiceAccount` is a Zod-validated type with `client_email`, `private_key` (PKCS#8 PEM with newlines preserved), `project_id`, and `token_uri`. Throws `AppError({ kind: 'internal', message: 'Invalid service account JSON' })` on parse failure.
+- `src/email/gmail/oauth.ts` — `getAccessToken(opts: { serviceAccount: ServiceAccount; scope: 'https://www.googleapis.com/auth/gmail.send'; tokenUri: string; fetchImpl?: typeof fetch; }): Promise<{ accessToken: string; expiresAt: number }>` — POSTs the JWT-bearer grant to the token URI, returns a typed access-token envelope, **caches the access token in KV** under `mail:oauth:{serviceAccount.email}:{scope}` with TTL = `expiresAt - 60s` (typed via `mail:oauth:...:expiresAt`) so repeated sends do not re-sign JWTs.
+- `src/email/gmail/send.ts` — `sendRawMessage(opts: { accessToken: string; senderEmail: string; rawMime: string; fetchImpl?: typeof fetch; }): Promise<{ messageId: string; threadId: string }>` — base64url-encodes the MIME message and POSTs to `https://gmail.googleapis.com/gmail/v1/users/{senderEmail}/messages/send`. Returns a typed response envelope. Throws typed `AppError` variants for Google 4xx/5xx responses.
+- `src/email/render/mime.ts` — `renderMime(opts: { from: string; to: string; subject: string; htmlBody: string; textBody?: string; }): string` — pure function that produces a valid RFC 2822 message.
+- `src/email/render/templates/` — one file per existing template (OTP, verification, password reset, magic-link). Each exports a `templateName(input: TemplateInput): { subject: string; html: string }` function with a Zod input schema.
+
+**Validation at the Gmail boundary (§2.3):** the response from `gmail/v1/users/.../messages/send` is Zod-parsed before being returned to callers. `unknown` is never assumed.
+
+**Tests required (§2.11):** the agent must include at least:
+- Unit test for `base64urlEncode` round-trip.
+- Unit test for `signJwtRsa256` with a generated test keypair (`crypto.subtle.generateKey` for `RSASSA-PKCS1-v1_5`, 2048-bit) — verify the output decodes back to the expected header + claim.
+- Unit test for `parseServiceAccountJson` rejecting malformed JSON and rejecting JSON missing required fields.
+- Unit test for `renderMime` producing a parseable RFC 2822 message.
+- Integration test that mocks `fetch` and verifies `sendRawMessage` issues the correct request and parses the response.
 
 ### 3.9 API Surface Parity
 
@@ -234,10 +273,12 @@ Every variable declared in `SMS-BACKEND/.env` and `.env.example` must be account
 | `JWT_SECRET` | `src/middleware/auth.js:15`, `src/socket/chatSocket.js:22`, `src/utils/helpers.js:5` | JWT signing/verification (with insecure `"SECRET_KEY"` fallback) | **Worker secret** via `wrangler secret put JWT_SECRET`; remove the `"SECRET_KEY"` fallback at all three sites; code paths must throw `AppError({ kind: 'internal', message: 'JWT_SECRET missing' })` if absent. The fallback is the single biggest security defect in the current code — it must be removed, not merely documented. |
 | `JWT_EXPIRES_IN` | declared in `.env.example` only — **never read** (hardcoded `"7d"` in `src/utils/helpers.js:5`) | (intended) JWT expiry | **REMOVE** from `.env.example` — dead var. Agent decides: wire it properly (`env.JWT_EXPIRES_IN` Zod-validated duration string, default `"7d"`) **or** leave hardcoded with rationale. Plan must commit to one. |
 | `GROQ_API_KEY` | `src/controllers/ai.controller.js:10-11` | Groq SDK client (single tenant-wide key) | **REMOVED as Worker secret.** Replaced by per-school BYOK keys encrypted in the `ai_provider_keys` D1 table (§3.7). During cutover, a `PLATFORM_DEFAULT_GROQ_KEY` Worker secret serves as the fallback when a school has no BYOK row configured (see §3.7 cutover gap). **The current key value in `.env` (`gsk_…`) must be treated as compromised and rotated before this migration ships** — it has been in source-controlled `.env` files. |
-| `EMAIL_HOST` | `src/services/mailService.js:4` (with default `smtp.gmail.com`) | SMTP host | **REMOVE** — Nodemailer replaced by Cloudflare Email Service; no SMTP host needed. The read at `mailService.js:4` must be removed. |
-| `EMAIL_PORT` | declared in `.env.example` only — **never read** (hardcoded `587` in `mailService.js:5`) | (intended) SMTP port | **REMOVE** from `.env.example` — dead var. Agent decides: wire it properly or leave hardcoded with rationale. |
-| `EMAIL_USER` | `mailService.js:6, 10, 11` | SMTP auth user + "from" address | **REMOVE as Worker secret.** Replaced by the Cloudflare Email Service binding's `from` field, which uses the Cloudflare-managed sender identity (no auth secret needed). The "from" address must be a verified domain in Cloudflare Email Routing. |
-| `EMAIL_PASS` | `mailService.js:6` | Gmail app password | **REMOVE** — no SMTP creds on Workers |
+| `EMAIL_HOST` | `src/services/mailService.js:4` (with default `smtp.gmail.com`) | SMTP host | **REMOVE** — Strategy B uses Gmail REST, not SMTP. The read at `mailService.js:4` must be removed. |
+| `EMAIL_PORT` | declared in `.env.example` only — **never read** (hardcoded `587` in `mailService.js:5`) | (intended) SMTP port | **REMOVE** from `.env.example` — dead var. |
+| `EMAIL_USER` | `mailService.js:6, 10, 11` | SMTP auth user + "from" address | **RENAME → `[vars].GMAIL_SENDER_EMAIL`** in `wrangler.jsonc` (non-secret — the address that owns the OAuth delegation). All three reads in `mailService.js` become `env.GMAIL_SENDER_EMAIL`. The current value `samarali5177@gmail.com` is the Gmail account that will be the OAuth-authorized sender. |
+| `EMAIL_PASS` | `mailService.js:6` | Gmail app password | **REMOVE entirely.** Replaced by `GOOGLE_SERVICE_ACCOUNT_JSON` Worker secret containing the Google Service Account JSON (`client_email`, `private_key`, `project_id`, `token_uri`), set via `wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON`. **The current value `bnyqtbeodhtolbzk` is a Gmail app password that has been in source-controlled `.env` files — it must be revoked in Google account settings and rotated before this migration ships.** Plan must include this as an explicit rollout item. |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | (new) | Service Account JSON for Gmail API OAuth | **NEW Worker secret** via `wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON`. Value is the full JSON downloaded from Google Cloud Console. Read by `parseServiceAccountJson` (§3.8a) at boot. |
+| `GMAIL_SENDER_EMAIL` | (new) | Authorized Gmail sender address | **NEW `[vars]`** in `wrangler.jsonc` (non-secret). Defaults to the previous `EMAIL_USER` value (`samarali5177@gmail.com`) for cutover continuity. |
 | `CLIENT_URL` | `server.js:17, 30` | CORS origin for Express + Socket.io (default `*`) | **`[vars]`** in `wrangler.jsonc`: `CLIENT_URL`. The Hono CORS middleware uses this for the allowlist (per §3.9, tightened from `*` to explicit origin, with `credentials: true` preserved). Non-secret; safe in `[vars]`. |
 | `CLOUDINARY_CLOUD_NAME` | **NEVER read** (declared but unused — confirmed by grep across `src/`) | (intended) Cloudinary cloud | **REMOVE** — unused declared dependency. `cloudinary` and `multer-storage-cloudinary` packages are also unused and are removed per §3.1. |
 | `CLOUDINARY_API_KEY` | **NEVER read** | (intended) Cloudinary API key | **REMOVE** — unused |
