@@ -173,9 +173,11 @@ This is a **first-class requirement**, not a migration afterthought. The fronten
 
 - **AI Gateway setup** — Gateway ID, account ID, the OpenAI-compatible proxy URL (recommended for BYOK with arbitrary upstreams) vs. the native Workers AI binding (recommended only if Workers AI is the primary provider). The agent decides based on the user's product goals.
 - **BYOK data model** — a D1 table for per-school provider keys. Schema design is the agent's, but the table must include: provider identifier (enum or discriminator), encrypted key ciphertext, a display hint (last N chars of the plaintext for UI), default flag, allowed-models list (validated), audit columns. The agent must decide between one-key-per-(school,provider) vs. one-default-per-school.
-- **Key encryption at rest** — typed encrypt/decrypt helpers using `MASTER_ENCRYPTION_KEY` (Worker secret). The agent chooses the algorithm (AES-GCM is a strong default) and shows that the plaintext key type and the ciphertext type are distinct, so a cipher cannot be passed where a plaintext key is expected.
+- **Key encryption at rest** — typed encrypt/decrypt helpers using `MASTER_ENCRYPTION_KEY` (Worker secret). The agent chooses the algorithm (AES-GCM is a strong default) and shows that the plaintext key type and the ciphertext type are distinct, so a cipher cannot be passed where a plaintext key is expected. **With BYOK, provider keys (Groq, OpenAI, etc.) are per-school, encrypted in D1 — there is no `GROQ_API_KEY` (or equivalent) Worker secret.** The only Worker secrets related to AI are `CF_ACCOUNT_ID` (for constructing the AI Gateway proxy URL) and optionally `CF_API_TOKEN` (only if the agent uses Gateway management APIs beyond the runtime proxy). The current `GROQ_API_KEY` in `SMS-BACKEND/.env` (a single tenant-wide key) is treated as a legacy fallback to be migrated into an `ai_provider_keys` row for the relevant school(s) — see §3.12a for the disposition.
+- **Cutover gap (platform fallback key):** during the migration window, schools that haven't configured BYOK have nothing to call. The agent must decide how to handle this — recommended: a Worker secret (or env var) `PLATFORM_DEFAULT_GROQ_KEY` used as the default when a school has no BYOK row, with a per-school daily token counter in KV/D1 so the platform cost is bounded. Alternatives the agent may justify: strict cutover (block AI for schools without BYOK), or platform-funded quota (platform absorbs cost with hard limits). The decision and the cost control mechanism go in the plan.
 - **API key management endpoints** — at least: list, get, upsert, update, delete, test (a cheap chat-completions probe that returns latency and a sample). All authenticated, school-scoped, never leaking the plaintext key in any response.
-- **OpenAI-compatible chat endpoint** — accepts the OpenAI SDK's chat-completions request shape, resolves the active provider (explicit override → school default → platform default), proxies through AI Gateway with the decrypted BYOK key on the Authorization header. For `stream: true`, the response is piped back unchanged so the OpenAI JS SDK works with just a `baseURL` swap. Plus a `GET /api/ai/models` (returns the union of models permitted for the school's configured providers) and `POST /api/ai/embeddings` (provider-passthrough).
+- **OpenAI-compatible chat endpoint** — accepts the OpenAI SDK's chat-completions request shape, resolves the active provider (explicit override → school default → platform default fallback per the cutover decision above), proxies through AI Gateway with the decrypted BYOK key on the Authorization header. For `stream: true`, the response is piped back unchanged so the OpenAI JS SDK works with just a `baseURL` swap. Plus a `GET /api/ai/models` (returns the union of models permitted for the school's configured providers) and `POST /api/ai/embeddings` (provider-passthrough).
+- **Body size limit:** preserve the current `express.json({ limit: '10mb' })` body-limit behavior for AI routes. The new Hono body parser must accept payloads up to 10 MB for `/api/ai/chat/completions` and related endpoints so existing clients sending large prompts (multi-message history, long context) continue to work.
 - **Authorization** — preserve the current `Student.canUseAI` gate and any role-based AI access controls.
 - **Drop `groq-sdk`** — the Worker uses plain `fetch` to the AI Gateway proxy URL.
 
@@ -187,7 +189,10 @@ Workers cannot open SMTP sockets. Replace Nodemailer with Cloudflare Email Servi
 
 ### 3.9 API Surface Parity
 
-Enumerate all route groups mounted under `/api/*` in the current backend. The plan must show a route-for-route, request/response-compatible mapping so the frontend needs only an API base URL change. Cover CORS tightening, 404/error-handler conventions, and the dual legacy/new model pairs (Attendance vs. AttendanceRecord, Timetable vs. TimetableEntry) that must both continue to work until the frontend is migrated off the legacy ones. All routes must be typed via Hono's typed routes plus Zod validators per §2.
+Enumerate all route groups mounted under `/api/*` in the current backend. The plan must show a route-for-route, request/response-compatible mapping so the frontend needs only an API base URL change. Cover 404/error-handler conventions, and the dual legacy/new model pairs (Attendance vs. AttendanceRecord, Timetable vs. TimetableEntry) that must both continue to work until the frontend is migrated off the legacy ones. All routes must be typed via Hono's typed routes plus Zod validators per §2.
+
+- **CORS tightening:** the current `CLIENT_URL || '*'` defaults to a wildcard. Replace with an explicit allowlist of the frontend origin(s) (read from `env.CLIENT_URL`), but **preserve the credentials behavior** — the current `cors({ origin, credentials: true })` setting matters because the frontend sends JWT via `Authorization` header and any future cookie-based auth depends on it. The Hono CORS middleware must keep `credentials: true` semantics.
+- **Legacy error contract preservation:** the current code throws `AppError` instances with a `statusCode` property (see `src/utils/helpers.js` and `src/middleware/auth.js`). The new typed error discriminated union (§2.6) must preserve this HTTP-status mapping for every existing endpoint — an `AppError({ kind: 'not_found', ... })` in the new code produces the same HTTP status the old code did for the equivalent error, and any code path that accesses `err.statusCode` must continue to type-check after migration.
 
 **Chat REST endpoints and socket events** must be enumerated in the Compatibility Snapshot (§3.3). Any change to a wire shape (field name, response order, event payload, side effect) is a frontend-migration item — explicitly listed, never silent.
 
@@ -216,6 +221,34 @@ The plan must call out features at risk of breaching the free tier and propose m
 
 The plan must include a full `wrangler.jsonc` (or `.toml`) mapping: `[vars]`, secrets (with `wrangler secret put` commands and Zod-validated `env.ts` schema), and bindings (D1, R2, KV, Durable Objects if any, AI, Email Sending). The agent must identify and remove dead env vars from the current `.env.example` (e.g. vars that are declared but hardcoded in code and never read). The plan must show the `Env` type with the Zod schema that validates it at boot.
 
+### 3.12a `.env` → `wrangler.jsonc` Mapping (Exhaustive)
+
+Every variable declared in `SMS-BACKEND/.env` and `.env.example` must be accounted for in the new Worker configuration — mapped to a Worker var, mapped to a Worker secret, mapped to a D1/BYOK row, marked obsolete, or marked dead (declared but never read by code). The plan must include the table below, completed for every row, with a one-line justification per row rooted in the codebase (line references from `src/`).
+
+**Inventory the agent must verify and complete:**
+
+| `.env` key | Read by (file:line) | Current purpose | Target disposition |
+|---|---|---|---|
+| `PORT` | `server.js:12` | HTTP listen port (default 5000) | **REMOVE** — Workers have no listen port; wrangler sets the listener |
+| `MONGO_URI` | `src/config/connectdb.js:4-5`, `wipe-db.js:7` | Mongoose connection string | **REMOVE** — replaced by D1 binding; migration script reads from Mongo then writes to D1 and does not need runtime access |
+| `JWT_SECRET` | `src/middleware/auth.js:15`, `src/socket/chatSocket.js:22`, `src/utils/helpers.js:5` | JWT signing/verification (with insecure `"SECRET_KEY"` fallback) | **Worker secret** via `wrangler secret put JWT_SECRET`; remove the `"SECRET_KEY"` fallback at all three sites; code paths must throw `AppError({ kind: 'internal', message: 'JWT_SECRET missing' })` if absent. The fallback is the single biggest security defect in the current code — it must be removed, not merely documented. |
+| `JWT_EXPIRES_IN` | declared in `.env.example` only — **never read** (hardcoded `"7d"` in `src/utils/helpers.js:5`) | (intended) JWT expiry | **REMOVE** from `.env.example` — dead var. Agent decides: wire it properly (`env.JWT_EXPIRES_IN` Zod-validated duration string, default `"7d"`) **or** leave hardcoded with rationale. Plan must commit to one. |
+| `GROQ_API_KEY` | `src/controllers/ai.controller.js:10-11` | Groq SDK client (single tenant-wide key) | **REMOVED as Worker secret.** Replaced by per-school BYOK keys encrypted in the `ai_provider_keys` D1 table (§3.7). During cutover, a `PLATFORM_DEFAULT_GROQ_KEY` Worker secret serves as the fallback when a school has no BYOK row configured (see §3.7 cutover gap). **The current key value in `.env` (`gsk_…`) must be treated as compromised and rotated before this migration ships** — it has been in source-controlled `.env` files. |
+| `EMAIL_HOST` | `src/services/mailService.js:4` (with default `smtp.gmail.com`) | SMTP host | **REMOVE** — Nodemailer replaced by Cloudflare Email Service; no SMTP host needed. The read at `mailService.js:4` must be removed. |
+| `EMAIL_PORT` | declared in `.env.example` only — **never read** (hardcoded `587` in `mailService.js:5`) | (intended) SMTP port | **REMOVE** from `.env.example` — dead var. Agent decides: wire it properly or leave hardcoded with rationale. |
+| `EMAIL_USER` | `mailService.js:6, 10, 11` | SMTP auth user + "from" address | **REMOVE as Worker secret.** Replaced by the Cloudflare Email Service binding's `from` field, which uses the Cloudflare-managed sender identity (no auth secret needed). The "from" address must be a verified domain in Cloudflare Email Routing. |
+| `EMAIL_PASS` | `mailService.js:6` | Gmail app password | **REMOVE** — no SMTP creds on Workers |
+| `CLIENT_URL` | `server.js:17, 30` | CORS origin for Express + Socket.io (default `*`) | **`[vars]`** in `wrangler.jsonc`: `CLIENT_URL`. The Hono CORS middleware uses this for the allowlist (per §3.9, tightened from `*` to explicit origin, with `credentials: true` preserved). Non-secret; safe in `[vars]`. |
+| `CLOUDINARY_CLOUD_NAME` | **NEVER read** (declared but unused — confirmed by grep across `src/`) | (intended) Cloudinary cloud | **REMOVE** — unused declared dependency. `cloudinary` and `multer-storage-cloudinary` packages are also unused and are removed per §3.1. |
+| `CLOUDINARY_API_KEY` | **NEVER read** | (intended) Cloudinary API key | **REMOVE** — unused |
+| `CLOUDINARY_API_SECRET` | **NEVER read** | (intended) Cloudinary API secret | **REMOVE** — unused |
+
+**Discipline:**
+- The agent must grep the entire `src/` tree for `process.env.` references and confirm the "Read by" column is exhaustive. Any variable found via grep that is not in the table above must be added with its own row.
+- The agent must grep the entire `src/` tree for the three Cloudinary keys specifically to confirm they are unused before declaring them removed.
+- Worker secrets (set via `wrangler secret put`) are listed separately from `[vars]` because they do not appear in source control. The plan must show the final `wrangler.jsonc` with all `[vars]` and bindings, and the `env.ts` Zod schema validating every var/secret/binding at boot.
+- Any value marked "compromised" or "must be rotated" in the disposition must appear as an explicit item in the plan's rollout section.
+
 ### 3.13 Phased Delivery Order
 
 The plan must be structured as ordered phases with prose explanations of *why* for each phase. A reasonable starting order is:
@@ -236,6 +269,39 @@ Every phase must include: a goal, a free-tier budget (concrete numbers), step-by
 ### 3.14 Per-File Change Inventory
 
 The plan must include a per-file change inventory covering every file added, modified, or removed, with line-level references. The agent decides the final file structure but should consider: a `src/app.ts` Hono composition root, a `src/index.ts` Worker export, a `src/db/` directory for schema and migrations, a `src/domain/` directory for entities/services/policies, a `src/persistence/` directory for D1/R2/KV/DO adapters, a `src/transport/` directory for HTTP routes and WebSocket handlers, a `src/ai/` directory for AI Gateway logic, a `src/chat/` directory for chat logic, and a `src/email/` directory for email templates. Frontend mirrors the structure with chat envelopes, webrtc clients, API client, and admin pages.
+
+### 3.15 Reuse Established Patterns, Conventions, and Code (Non-Negotiable)
+
+**The agent must not reinvent.** Before designing any new module, route, repository, utility, or frontend component, the agent must survey the existing codebase for established patterns, naming conventions, directory layout, helper functions, shared utilities, and reusable code, and reuse them. Reinventing an existing pattern is a defect.
+
+**Required reuse activities (the agent must perform and document in the plan):**
+
+1. **Pattern survey.** During the research phase, maintain a `## Established Patterns` section in the plan listing:
+   - The directory structure under `SMS-BACKEND/src/` (`controllers/`, `routes/`, `models/`, `services/`, `middleware/`, `utils/`, `config/`, `socket/`) and how files are organized within each (one file per resource, naming `<resource>.controller.js`, `<resource>.routes.js`).
+   - Naming conventions for files, functions, variables, IDs, branded types, env vars, route paths, table/column names, error variants, and exported types.
+   - The established controller pattern (current shape: `exports.<actionName> = async (req, res) => { try { ... } catch (err) { res.status(500).json({ success: false, message: err.message }) } }` with `req.user`, `req.userRole`, `req.schoolId` populated by auth middleware).
+   - The established route pattern (current shape: `router.<method>(path, middleware, handler)` exported as `module.exports = router`).
+   - The established response envelope (`{ success: boolean, <data>?, message?: string }`).
+   - Shared utilities in `src/utils/helpers.js` and elsewhere — JWT helpers (`generateToken`, `verifyToken`), `AppError`, password hashing, school-code/receipt-number generators, date formatting, response helpers.
+   - Shared middleware patterns in `src/middleware/` (auth, role checks).
+   - Shared service patterns in `src/services/` (mailService, any others).
+   - Frontend conventions in `SMS-FRONTEND/` — API client usage, state stores, form patterns, component structure, routing.
+
+2. **Reuse-before-write rule.** For every new file or function in the plan, the agent must explicitly state which existing pattern or utility it reuses, or justify why a new pattern is warranted. "We wrote a new helper" without a justification against the existing helpers is not acceptable.
+
+3. **Frontend parity.** The frontend pattern survey must be done with equal rigor. The agent must reuse the existing API client structure, form components, state management, and UI components — not introduce parallel patterns.
+
+4. **Refactor vs. migrate.** When an existing pattern is structurally incompatible with the new architecture (e.g. Express middleware shape vs. Hono middleware shape), the agent must justify the deviation and show how the existing concept (auth, role check, validation, error mapping) is preserved even though the surface syntax changes.
+
+5. **Established patterns are carried forward verbatim unless explicitly justified.** This applies to: response envelope shapes, error variants that map to existing HTTP statuses, route path conventions, controller method signatures (adapted to the new framework but semantically equivalent), and any utility logic that has no platform dependency (e.g. school-code generation, password hashing rules, date math).
+
+**Defects the agent must reject in its own work:**
+- Inventing a new error envelope (`{ error: { code, details } }`) when the existing one (`{ success: false, message }`) can be preserved with a small extension for the new typed error union.
+- Writing a new password helper when `bcryptjs` is already a dependency with established usage.
+- Adding new date utilities when `src/utils/helpers.js` already provides them.
+- Creating a parallel auth flow when the existing JWT + role + schoolId pattern can be ported.
+- Introducing a new ORM/query pattern when an existing repository pattern can be adapted.
+- Adding new utility functions for school-code generation, receipt numbering, or OTP generation when existing helpers in `src/utils/helpers.js` perform these.
 
 ---
 
